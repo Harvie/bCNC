@@ -117,7 +117,7 @@ class Tool(Plugin):
 		#pix[x-2,y-2] +=4
 		pix[x-1,y-2] +=4
 		pix[x-0,y-2] +=4
-		pix[x+1,y+2] +=4
+		pix[x+1,y-2] +=4
 		#pix[x+2,y+2] +=4
 
 		#pix[x-2,y+2] +=4
