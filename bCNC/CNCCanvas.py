@@ -289,6 +289,7 @@ class CNCCanvas(GLCanvas):
         self._path_coords = {}
         self._camera_on = False
         self._camera_texture = None
+        self._active_item = None
 
         self.reset()
         self.initPosition()
@@ -943,6 +944,12 @@ class CNCCanvas(GLCanvas):
     def clearSelection(self):
         self.selected_items = []
         self.draw()
+
+    def activeMarker(self, item=None):
+        """Highlight the active gcode line"""
+        if self._active_item != item:
+            self._active_item = item
+            self.draw()
 
     # ----------------------------------------------------------------------
     # Highlight selected items
@@ -1796,13 +1803,22 @@ class CNCCanvas(GLCanvas):
                 if self.cnc.gcode == 0:
                     return None
 
-            # set color
+            # set color and line width
+            is_active = (block.bid, j) == self._active_item
+            is_selected = (block.bid, j) in self.selected_items
+
             if self._picking_mode:
                 r, g, b = self.to_id_color(block.bid, j)
                 glColor3f(r, g, b)
                 glDisable(GL_LINE_STIPPLE)
-            elif (block.bid, j) in self.selected_items:
-                glColor3f(0.0, 0.0, 1.0)  # blue
+            elif is_active:
+                glColor3f(1.0, 0.65, 0.0)  # Orange for active
+                glLineWidth(2.0)
+                glDisable(GL_LINE_STIPPLE)
+            elif is_selected:
+                glColor3f(0.0, 0.0, 1.0)  # Blue for selected
+                glLineWidth(1.0) # Ensure it's normal width
+                glDisable(GL_LINE_STIPPLE)
             elif self.cnc.gcode == 0:
                 if self.draw_rapid:
                     glColor3f(0.5, 0.5, 0.5)
@@ -1813,9 +1829,14 @@ class CNCCanvas(GLCanvas):
                 glDisable(GL_LINE_STIPPLE)
 
             glBegin(GL_LINE_STRIP)
-            for x,y,z in xyz:
-                glVertex3f(x,y,z)
+            for x, y, z in xyz:
+                glVertex3f(x, y, z)
             glEnd()
+
+            # Reset line width if it was changed
+            if is_active:
+                glLineWidth(1.0)
+
             glDisable(GL_LINE_STIPPLE)
 
         return (block.bid, j)
