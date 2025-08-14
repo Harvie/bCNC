@@ -286,6 +286,7 @@ class CNCCanvas(GLCanvas):
         self._info_items = []
         self._probe_texture = None
         self._probe_hash = None
+        self._path_coords = {}
 
         self.reset()
         self.initPosition()
@@ -669,7 +670,13 @@ class CNCCanvas(GLCanvas):
 
             new_selection = []
             if bid is not None and lid is not None:
-                new_selection.append((bid, lid))
+                block = self.gcode.blocks[bid]
+                if block.expand:
+                    # Select single line
+                    new_selection.append((bid, lid))
+                else:
+                    # Select whole block
+                    new_selection.extend([(bid, i) for i in range(len(block))])
 
             # Handle selection logic
             is_replace = event.state & CONTROL_MASK == 0
@@ -1242,6 +1249,81 @@ class CNCCanvas(GLCanvas):
                 glEnd()
         glDisable(GL_LINE_STIPPLE)
 
+    def drawSelectionHighlights(self):
+        if not self.selected_items:
+            return
+
+        glLineWidth(2.0)
+        glColor3f(0.0, 0.0, 1.0)  # Blue, to match selection color
+
+        for bid, lid in self.selected_items:
+            coords = self._path_coords.get((bid, lid))
+            if not coords:
+                continue
+
+            start_point, end_point = coords
+            if start_point == end_point:
+                continue
+
+            # Vector from start to end
+            dx = end_point[0] - start_point[0]
+            dy = end_point[1] - start_point[1]
+            dz = end_point[2] - start_point[2]
+
+            # Normalize the vector
+            length = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if length == 0:
+                continue
+            dx /= length
+            dy /= length
+            dz /= length
+
+            # Arrowhead size
+            arrow_size = self.scale * 0.2
+            if arrow_size < 0.5: arrow_size = 0.5
+            if arrow_size > 2.0: arrow_size = 2.0
+
+            # Arrow base point
+            base_point = (
+                end_point[0] - dx * arrow_size,
+                end_point[1] - dy * arrow_size,
+                end_point[2] - dz * arrow_size,
+            )
+
+            # Perpendicular vector for arrowhead base using cross product
+            # Find a vector that is not parallel to the direction vector
+            if abs(dx) > 0.1 or abs(dy) > 0.1:
+                up_vec = (0.0, 0.0, 1.0) # World up
+            else:
+                up_vec = (1.0, 0.0, 0.0) # World right
+
+            p_dx = dy * up_vec[2] - dz * up_vec[1]
+            p_dy = dz * up_vec[0] - dx * up_vec[2]
+            p_dz = dx * up_vec[1] - dy * up_vec[0]
+            p_len = math.sqrt(p_dx**2 + p_dy**2 + p_dz**2)
+            p_dx /= p_len
+            p_dy /= p_len
+            p_dz /= p_len
+
+            # Arrowhead base vertices
+            v1 = (
+                base_point[0] + p_dx * arrow_size * 0.4,
+                base_point[1] + p_dy * arrow_size * 0.4,
+                base_point[2] + p_dz * arrow_size * 0.4,
+            )
+            v2 = (
+                base_point[0] - p_dx * arrow_size * 0.4,
+                base_point[1] - p_dy * arrow_size * 0.4,
+                base_point[2] - p_dz * arrow_size * 0.4,
+            )
+
+            # Draw a simple triangle arrowhead
+            glBegin(GL_TRIANGLES)
+            glVertex3f(*end_point)
+            glVertex3f(*v1)
+            glVertex3f(*v2)
+            glEnd()
+
     # ----------------------------------------------------------------------
     # Parse and draw the file from the editor to g-code commands
     # ----------------------------------------------------------------------
@@ -1269,6 +1351,7 @@ class CNCCanvas(GLCanvas):
         self.drawAxes()
         self._drawVector()
         self.drawInfo()
+        self.drawSelectionHighlights()
         self.swap_buffers()
 
         self._inDraw = False
@@ -1399,7 +1482,7 @@ class CNCCanvas(GLCanvas):
         if not self.draw_grid:
             return
         glLineWidth(1.0)
-        glColor3f(0.5, 0.5, 0.5)
+        glColor3f(0.8, 0.8, 0.8)
         glBegin(GL_LINES)
         for i in range(-100, 101, 10):
             glVertex3f(i, -100.0, 0.0)
@@ -1570,6 +1653,7 @@ class CNCCanvas(GLCanvas):
             n = 1
             startTime = before = time.time()
             self.cnc.resetAllMargins()
+            self._path_coords.clear()
             drawG = self.draw_rapid or self.draw_paths or self.draw_margin
             for i, block in enumerate(self.gcode.blocks):
                 start = True  # start location found
@@ -1624,6 +1708,7 @@ class CNCCanvas(GLCanvas):
         xyz = self.cnc.motionPath()
         self.cnc.motionEnd()
         if xyz:
+            self._path_coords[(block.bid, j)] = (xyz[0], xyz[-1])
             self.cnc.pathLength(block, xyz)
             if self.cnc.gcode in (1, 2, 3):
                 block.pathMargins(xyz)
