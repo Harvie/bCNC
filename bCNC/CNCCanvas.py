@@ -7,6 +7,7 @@ import math
 import time
 import sys
 import hashlib
+from collections import Counter
 
 from tkinter import (
     TclError,
@@ -287,6 +288,7 @@ class CNCCanvas(GLCanvas):
         self._probe_texture = None
         self._probe_hash = None
         self._path_coords = {}
+        self._full_path_cache = {}
         self._camera_on = False
         self._camera_texture = None
         self._active_item = None
@@ -660,16 +662,33 @@ class CNCCanvas(GLCanvas):
             x = event.x
             y = self.winfo_height() - event.y  # Y is inverted in OpenGL
 
-            # Make sure we don't read outside the framebuffer
-            if x < 0 or x >= self.winfo_width() or y < 0 or y >= self.winfo_height():
-                glBindFramebuffer(GL_FRAMEBUFFER, 0)
-                self._mouseAction = None
-                return
+            # Read a small area around the cursor to give a selection margin
+            margin = 2  # Results in a 5x5 pixel area
+            x_start = x - margin
+            y_start = y - margin
+            width = height = margin * 2 + 1
 
-            color = glReadPixels(x, y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
+            # Clamp the read area to be within the framebuffer dimensions
+            x_start = max(0, min(x_start, self.winfo_width() - width))
+            y_start = max(0, min(y_start, self.winfo_height() - height))
+
+            pixels = glReadPixels(x_start, y_start, width, height, GL_RGB, GL_UNSIGNED_BYTE)
             glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-            bid, lid = self.from_id_color((color[0], color[1], color[2]))
+            # Find the most common non-background ID in the area
+            ids = []
+            if len(pixels) > 0:
+                for i in range(0, len(pixels), 3):
+                    color = (pixels[i], pixels[i+1], pixels[i+2])
+                    bid_cand, lid_cand = self.from_id_color(color)
+                    if bid_cand is not None:
+                        ids.append((bid_cand, lid_cand))
+
+            if ids:
+                # Use Counter to find the most frequent ID
+                bid, lid = Counter(ids).most_common(1)[0][0]
+            else:
+                bid, lid = None, None
 
             new_selection = []
             if bid is not None and lid is not None:
@@ -780,7 +799,27 @@ class CNCCanvas(GLCanvas):
     # Get margins of selected items
     # ----------------------------------------------------------------------
     def getMargins(self):
-        return 0,0
+        if not self.selected_items:
+            return 0.0, 0.0
+
+        min_x, max_x = float('inf'), float('-inf')
+        min_y, max_y = float('inf'), float('-inf')
+
+        for bid, lid in self.selected_items:
+            path = self._full_path_cache.get((bid, lid))
+            if not path:
+                continue
+
+            for x, y, z in path:
+                if x < min_x: min_x = x
+                if x > max_x: max_x = x
+                if y < min_y: min_y = y
+                if y > max_y: max_y = y
+
+        if min_x == float('inf'): # Nothing was found
+            return 0.0, 0.0
+
+        return max_x - min_x, max_y - min_y
 
     def resize_fbo(self):
         """Resize framebuffer object attachments"""
@@ -1736,6 +1775,7 @@ class CNCCanvas(GLCanvas):
             startTime = before = time.time()
             self.cnc.resetAllMargins()
             self._path_coords.clear()
+            self._full_path_cache.clear()
             drawG = self.draw_rapid or self.draw_paths or self.draw_margin
             for i, block in enumerate(self.gcode.blocks):
                 start = True  # start location found
@@ -1791,6 +1831,7 @@ class CNCCanvas(GLCanvas):
         self.cnc.motionEnd()
         if xyz:
             self._path_coords[(block.bid, j)] = (xyz[0], xyz[-1])
+            self._full_path_cache[(block.bid, j)] = xyz
             self.cnc.pathLength(block, xyz)
             if self.cnc.gcode in (1, 2, 3):
                 block.pathMargins(xyz)
@@ -1806,6 +1847,7 @@ class CNCCanvas(GLCanvas):
             # set color and line width
             is_active = (block.bid, j) == self._active_item
             is_selected = (block.bid, j) in self.selected_items
+            is_enabled = block.enable
 
             if self._picking_mode:
                 r, g, b = self.to_id_color(block.bid, j)
@@ -1815,6 +1857,13 @@ class CNCCanvas(GLCanvas):
                 glColor3f(1.0, 0.65, 0.0)  # Orange for active
                 glLineWidth(2.0)
                 glDisable(GL_LINE_STIPPLE)
+            elif not is_enabled:
+                glLineWidth(1.0)
+                glDisable(GL_LINE_STIPPLE)
+                if is_selected:
+                    glColor3f(0.25, 0.88, 0.82)  # Turquoise for disabled+selected
+                else:
+                    glColor3f(0.75, 0.75, 0.75)  # Light Gray for disabled
             elif is_selected:
                 glColor3f(0.0, 0.0, 1.0)  # Blue for selected
                 glLineWidth(1.0) # Ensure it's normal width
