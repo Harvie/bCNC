@@ -389,7 +389,8 @@ class CNCCanvas(GLCanvas):
         self.action = action
         self.actionVar.set(action)
         self._mouseAction = None
-        self.config(cursor=mouseCursor(self.action), background="White")
+        self.config(cursor=mouseCursor(self.action))
+        self.draw()
 
     # ----------------------------------------------------------------------
     def actionCancel(self, event=None):
@@ -422,13 +423,11 @@ class CNCCanvas(GLCanvas):
     # ----------------------------------------------------------------------
     def setActionGantry(self, event=None):
         self.setAction(ACTION_GANTRY)
-        self.config(background="seashell")
         self.status(_("Move CNC gantry to mouse location"))
 
     # ----------------------------------------------------------------------
     def setActionWPOS(self, event=None):
         self.setAction(ACTION_WPOS)
-        self.config(background="ivory")
         self.status(
             _("Set mouse location as current machine position (X/Y only)"))
 
@@ -1163,7 +1162,14 @@ class CNCCanvas(GLCanvas):
 
     def init_opengl(self):
         """Initialise the GL canvas"""
-        glClearColor(1.0, 1.0, 1.0, 1.0)
+        # Set background color based on current action
+        if self.action == ACTION_GANTRY:
+            glClearColor(1.0, 0.96, 0.93, 1.0) # seashell
+        elif self.action == ACTION_WPOS:
+            glClearColor(1.0, 1.0, 0.94, 1.0) # ivory
+        else:
+            glClearColor(1.0, 1.0, 1.0, 1.0) # White
+
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
