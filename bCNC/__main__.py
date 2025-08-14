@@ -42,6 +42,9 @@ def usage(rc):
 
 # -----------------------------------------------------------------------------
 def main():
+    from OpenGL.GLUT import glutInit
+    import sys
+    glutInit(sys.argv)
     import Helpers
     import bmain
     import tkExtra

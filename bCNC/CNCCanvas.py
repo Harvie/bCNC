@@ -48,6 +48,7 @@ from tkinter_gl import GLCanvas
 
 from OpenGL.GL import *
 from OpenGL.GLU import *
+from OpenGL.GLUT import *
 
 
 import bmath
@@ -1817,7 +1818,7 @@ class CNCCanvas(GLCanvas):
         glEnable(GL_TEXTURE_2D)
         glBindTexture(GL_TEXTURE_2D, self._probe_texture)
 
-        z = probe.zmin if self.app.probe.get("probe_surface_z") == "min" else probe.zmax
+        z = probe.zmin if Utils.getStr("Probe", "surface_z", "min") == "min" else probe.zmax
 
         glBegin(GL_QUADS)
         glTexCoord2f(0.0, 0.0); glVertex3f(probe.xmin, probe.ymin, z)
@@ -1870,6 +1871,14 @@ class CNCCanvas(GLCanvas):
         for x, y, z in probe.points:
             glVertex3f(x, y, z)
         glEnd()
+
+        # Draw probe text
+        glColor3f(0.0, 0.5, 0.0) # Dark Green
+        for x, y, z in probe.points:
+            glRasterPos3f(x + 0.5, y + 0.5, z)
+            text = f"{z:.{CNC.digits}f}"
+            for char in text:
+                glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord(char))
 
 
     # ----------------------------------------------------------------------
