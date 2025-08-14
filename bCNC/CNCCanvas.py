@@ -585,42 +585,50 @@ class CNCCanvas(GLCanvas):
             self.setActionSelect()
 
         elif self.action == ACTION_PAN:
-            self.pan(event)
+            self._mouseAction = ACTION_PAN
 
     # ----------------------------------------------------------------------
     # Canvas motion button 1
     # ----------------------------------------------------------------------
     def buttonMotion(self, event):
+        # If we started a selection, check if we've dragged far enough to be a rotation
+        if self._mouseAction == ACTION_SELECT_SINGLE:
+            dist_sq = (event.x - self._xp)**2 + (event.y - self._yp)**2
+            if dist_sq > (CLOSE_DISTANCE**2):
+                self._mouseAction = ACTION_ROTATE
+
         dx = event.x - self._x
         dy = event.y - self._y
-        if self.action == ACTION_SELECT:
-                self.r[0] += dy
-                self.r[1] += dx
-        elif self.action == ACTION_PAN:
-                self.t[0] += dx*0.1
-                self.t[1] -= dy*0.1
-        elif self.action == ACTION_RULER:
+
+        # Perform action based on the current mouse action
+        if self._mouseAction == ACTION_ROTATE:
+            self.r[0] += dy
+            self.r[1] += dx
+        elif self._mouseAction == ACTION_PAN:
+            self.t[0] += dx * 0.1
+            self.t[1] -= dy * 0.1
+        elif self._mouseAction == ACTION_RULER:
             self._vx1, self._vy1, self._vz1 = self.canvas2xyz(event.x, event.y)
             self._vector[3:] = [self._vx1, self._vy1, self._vz1]
-            dx = self._vx1 - self._vx0
-        elif self.action == ACTION_MOVE:
-            self._vx1, self._vy1, self._vz1 = self.canvas2xyz(event.x, event.y)
-            dx = self._vx1 - self._vx0
-            dy = self._vy1 - self._vy0
-            dz = self._vz1 - self._vz0
-            self.gcode.moveLines(self.selected_items, dx, dy, dz)
-            self._vx0, self._vy0, self._vz0 = self._vx1, self._vy1, self._vz1
-            dy = self._vy1 - self._vy0
-            dz = self._vz1 - self._vz0
+            dx_ruler = self._vx1 - self._vx0
+            dy_ruler = self._vy1 - self._vy0
+            dz_ruler = self._vz1 - self._vz0
             self.status(
                 _("dx={:g}  dy={:g}  dz={:g}  length={:g}  angle={:g}").format(
-                    dx,
-                    dy,
-                    dz,
-                    math.sqrt(dx**2 + dy**2 + dz**2),
-                    math.degrees(math.atan2(dy, dx)),
+                    dx_ruler,
+                    dy_ruler,
+                    dz_ruler,
+                    math.sqrt(dx_ruler**2 + dy_ruler**2 + dz_ruler**2),
+                    math.degrees(math.atan2(dy_ruler, dx_ruler)),
                 )
             )
+        elif self._mouseAction == ACTION_MOVE:
+            self._vx1, self._vy1, self._vz1 = self.canvas2xyz(event.x, event.y)
+            dx_move = self._vx1 - self._vx0
+            dy_move = self._vy1 - self._vy0
+            dz_move = self._vz1 - self._vz0
+            self.gcode.moveLines(self.selected_items, dx_move, dy_move, dz_move)
+            self._vx0, self._vy0, self._vz0 = self._vx1, self._vy1, self._vz1
 
         self._x = event.x
         self._y = event.y
@@ -690,10 +698,13 @@ class CNCCanvas(GLCanvas):
             dz = self._vz1 - self._vz0
             self.status(_("Move by {:g}, {:g}, {:g}").format(dx, dy, dz))
             self.app.insertCommand(("move %g %g %g") % (dx, dy, dz), True)
+            self._mouseAction = None
 
-        elif self.action == ACTION_PAN:
-            self.action = ACTION_SELECT
-            self.config(cursor=mouseCursor(self.action))
+        elif self._mouseAction == ACTION_PAN:
+            self.setAction(ACTION_SELECT)
+
+        elif self._mouseAction == ACTION_ROTATE:
+            self._mouseAction = None
 
         self.draw()
 
