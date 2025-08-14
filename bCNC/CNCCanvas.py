@@ -1411,7 +1411,7 @@ class CanvasFrame(Frame):
         toolbar = Frame(self, relief=RAISED)
         toolbar.grid(row=0, column=0, columnspan=2, sticky=EW)
 
-        self.canvas = CNCCanvas(self, app, takefocus=True, background="White")
+        self.canvas = CNCCanvas(self, app, background="White")
         # OpenGL context
         self.canvas.grid(row=1, column=0, sticky=NSEW)
 
