@@ -791,58 +791,13 @@ class CNCCanvas(GLCanvas):
     # Clear highlight of selection
     # ----------------------------------------------------------------------
     def clearSelection(self):
-        if self._lastActive is not None:
-            self.itemconfig(self._lastActive, arrow=NONE)
-            self._lastActive = None
-
-        for i in self.find_withtag("sel"):
-            bid, lid = self._items[i]
-            if bid:
-                try:
-                    block = self.gcode[bid]
-                    if block.color:
-                        fill = block.color
-                    else:
-                        fill = ENABLE_COLOR
-                except IndexError:
-                    fill = ENABLE_COLOR
-            else:
-                fill = ENABLE_COLOR
-            self.itemconfig(i, width=1, fill=fill)
-
-        self.itemconfig("sel2", width=1, fill=DISABLE_COLOR)
-        self.itemconfig("sel3", width=1, fill=TAB_COLOR)
-        self.itemconfig("sel4", width=1, fill=DISABLE_COLOR)
-        for i in SELECTION_TAGS:
-            self.dtag(i)
-        self.delete("info")
+        pass
 
     # ----------------------------------------------------------------------
     # Highlight selected items
     # ----------------------------------------------------------------------
     def select(self, items):
-        for b, i in items:
-            block = self.gcode[b]
-            if i is None:
-                sel = block.enable and "sel" or "sel2"
-                for path in block._path:
-                    if path is not None:
-                        self.addtag_withtag(sel, path)
-                sel = block.enable and "sel3" or "sel4"
-
-            elif isinstance(i, int):
-                path = block.path(i)
-                if path:
-                    sel = block.enable and "sel" or "sel2"
-                    self.addtag_withtag(sel, path)
-
-        self.itemconfig("sel", width=2, fill=SELECT_COLOR)
-        self.itemconfig("sel2", width=2, fill=SELECT2_COLOR)
-        self.itemconfig("sel3", width=2, fill=TAB_COLOR)
-        self.itemconfig("sel4", width=2, fill=TABS_COLOR)
-        for i in SELECTION_TAGS:
-            self.tag_raise(i)
-        self.drawMargin()
+        pass
 
     # ----------------------------------------------------------------------
     # Select orientation marker
@@ -1076,7 +1031,7 @@ class CNCCanvas(GLCanvas):
         self.drawProbe()
         self.drawOrient()
         self.drawAxes()
-        self.tkSwapBuffers()
+        self.swap_buffers()
 
         self._inDraw = False
 
