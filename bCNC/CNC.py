@@ -2680,6 +2680,28 @@ class GCode:
                 )
         return minx, miny, maxx, maxy
 
+    def get_max_min_coords(self):
+        """Get the maximum and minimum coordinates of the gcode."""
+        if self.is_empty():
+            return 0, 0, 0, 0, 0, 0
+
+        min_x, max_x = float('inf'), float('-inf')
+        min_y, max_y = float('inf'), float('-inf')
+        min_z, max_z = float('inf'), float('-inf')
+
+        for block in self.blocks:
+            min_x = min(min_x, block.xmin)
+            max_x = max(max_x, block.xmax)
+            min_y = min(min_y, block.ymin)
+            max_y = max(max_y, block.ymax)
+            min_z = min(min_z, block.zmin)
+            max_z = max(max_z, block.zmax)
+
+        return min_x, max_x, min_y, max_y, min_z, max_z
+
+    def is_empty(self):
+        return not self.blocks
+
     # ----------------------------------------------------------------------
     # Save in SVG format
     # ----------------------------------------------------------------------
