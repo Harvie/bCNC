@@ -1329,8 +1329,10 @@ class Application(Tk, Sender):
 
     # ----------------------------------------------------------------------
     def draw(self):
-        view = CNCCanvas.VIEWS.index(self.canvasFrame.view.get())
-        self.canvas.draw(view)
+        view_name = self.canvasFrame.view.get()
+        if view_name not in CNCCanvas.VIEWS:
+            view_name = CNCCanvas.VIEWS[0]
+        self.canvas.draw(view_name)
         self.selectionChange()
 
     # ----------------------------------------------------------------------

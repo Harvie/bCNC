@@ -1060,9 +1060,12 @@ class CNCCanvas(GLCanvas):
         self._inDraw = True
 
         if view is not None:
-            self.projection = view
+            if view == "Perspective":
+                self.projection = PROJECTION_PERSPECTIVE
+            elif view == "Orthographic":
+                self.projection = PROJECTION_ORTHOGRAPHIC
 
-        self.tkMakeCurrent()
+        self.make_current()
         self.init_opengl()
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
