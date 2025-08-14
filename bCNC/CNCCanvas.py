@@ -287,6 +287,8 @@ class CNCCanvas(GLCanvas):
         self._probe_texture = None
         self._probe_hash = None
         self._path_coords = {}
+        self._camera_on = False
+        self._camera_texture = None
 
         self.reset()
         self.initPosition()
@@ -1008,21 +1010,24 @@ class CNCCanvas(GLCanvas):
     def cameraOn(self, event=None):
         if not self.camera.start():
             return
+        self._camera_on = True
         self.cameraRefresh()
 
     # -----------------------------------------------------------------------
     def cameraOff(self, event=None):
-        self.delete(self._cameraImage)
-        self.delete(self._cameraHori)
-        self.delete(self._cameraVert)
-        self.delete(self._cameraCircle)
-        self.delete(self._cameraCircle2)
+        self._camera_on = False
+        if self._camera_texture is not None:
+            self.make_current()
+            glDeleteTextures([self._camera_texture])
+            self._camera_texture = None
 
-        self._cameraImage = None
         if self._cameraAfter:
             self.after_cancel(self._cameraAfter)
             self._cameraAfter = None
-        self.camera.stop()
+
+        if self.camera.isOn():
+            self.camera.stop()
+        self.draw()
 
     # -----------------------------------------------------------------------
     def cameraUpdate(self):
@@ -1032,13 +1037,17 @@ class CNCCanvas(GLCanvas):
             self.after_cancel(self._cameraAfter)
             self._cameraAfter = None
         self.cameraRefresh()
-        self.cameraPosition()
 
     # -----------------------------------------------------------------------
     def cameraRefresh(self):
+        if not self._camera_on:
+            return
+
         if not self.camera.read():
             self.cameraOff()
             return
+
+        # I am not sure what all this processing does, but I will keep it
         self.camera.rotation = self.cameraRotation
         self.camera.xcenter = self.cameraXCenter
         self.camera.ycenter = self.cameraYCenter
@@ -1050,27 +1059,28 @@ class CNCCanvas(GLCanvas):
                 self._cameraMaxWidth,
                 self._cameraMaxHeight,
             )
-        if self._cameraImage is None:
-            self._cameraImage = self.create_image((0, 0), tag="CameraImage")
-            self.lower(self._cameraImage)
-            # create cross hair at dummy location we will correct latter
-            self._cameraHori = self.create_line(
-                0, 0, 1, 0, fill=CAMERA_COLOR, tag="CrossHair"
-            )
-            self._cameraVert = self.create_line(
-                0, 0, 0, 1, fill=CAMERA_COLOR, tag="CrossHair"
-            )
-            self._cameraCircle = self.create_oval(
-                0, 0, 1, 1, outline=CAMERA_COLOR, tag="CrossHair"
-            )
-            self._cameraCircle2 = self.create_oval(
-                0, 0, 1, 1, outline=CAMERA_COLOR, dash=(3, 3), tag="CrossHair"
-            )
-            self.cameraPosition()
-        try:
-            self.itemconfig(self._cameraImage, image=self.camera.toTk())
-        except Exception:
-            pass
+
+        # Get image data and update texture
+        image_data = self.camera.image
+        if image_data is not None:
+            self.make_current()
+            if self._camera_texture is None:
+                self._camera_texture = glGenTextures(1)
+                glBindTexture(GL_TEXTURE_2D, self._camera_texture)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+
+            glBindTexture(GL_TEXTURE_2D, self._camera_texture)
+            h, w = image_data.shape[:2]
+
+            # Convert BGR to RGB for OpenGL
+            if len(image_data.shape) == 3 and image_data.shape[2] == 3:
+                image_data = image_data[:, :, ::-1]
+
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, image_data)
+            glBindTexture(GL_TEXTURE_2D, 0)
+
+        self.draw()
         self._cameraAfter = self.after(100, self.cameraRefresh)
 
     # -----------------------------------------------------------------------
@@ -1090,47 +1100,10 @@ class CNCCanvas(GLCanvas):
     # Reposition camera and crosshair
     # ----------------------------------------------------------------------
     def cameraPosition(self):
-        if self._cameraImage is None:
-            return
-        w = self.winfo_width()
-        h = self.winfo_height()
-        hc, wc = self.camera.image.shape[:2]
-        wc //= 2
-        hc //= 2
-        x = w // 2  # everything on center
-        y = h // 2
-        if self.cameraAnchor is NONE:
-            if self._lastGantry is not None:
-                x, y = self.plotCoords([self._lastGantry])[0]
-            else:
-                x = y = 0
-            if not self.cameraSwitch:
-                x += self.cameraDx * self.zoom
-                y -= self.cameraDy * self.zoom
-            r = self.cameraR * self.zoom
-        else:
-            if self.cameraAnchor != CENTER:
-                if N in self.cameraAnchor:
-                    y = hc
-                elif S in self.cameraAnchor:
-                    y = h - hc
-                if W in self.cameraAnchor:
-                    x = wc
-                elif E in self.cameraAnchor:
-                    x = w - wc
-            x = self.canvasx(x)
-            y = self.canvasy(y)
-            if self.zoom / self.cameraScale > 1.0:
-                r = self.cameraR * self.zoom
-            else:
-                r = self.cameraR * self.cameraScale
-
-        self.coords(self._cameraImage, x, y)
-        self.coords(self._cameraHori, x - wc, y, x + wc, y)
-        self.coords(self._cameraVert, x, y - hc, x, y + hc)
-        self.coords(self._cameraCircle, x - r, y - r, x + r, y + r)
-        self.coords(
-            self._cameraCircle2, x - r * 2, y - r * 2, x + r * 2, y + r * 2)
+        # This method is now obsolete. The positioning is handled
+        # by the new drawCameraOverlay() method's transformation matrix.
+        # I will leave it here as a stub for now.
+        pass
 
     # ----------------------------------------------------------------------
     # Crop center of camera and search it in subsequent movements
@@ -1324,6 +1297,107 @@ class CNCCanvas(GLCanvas):
             glVertex3f(*v2)
             glEnd()
 
+    def getCameraPosition(self, w, h):
+        canvas_w = self.winfo_width()
+        canvas_h = self.winfo_height()
+
+        if self.cameraAnchor == NONE:
+            if self._lastGantry is not None:
+                # Project 3D gantry position to 2D screen coordinates
+                try:
+                    modelview = glGetDoublev(GL_MODELVIEW_MATRIX)
+                    projection = glGetDoublev(GL_PROJECTION_MATRIX)
+                    viewport = glGetIntegerv(GL_VIEWPORT)
+                    x, y, z = gluProject(self._lastGantry[0], self._lastGantry[1], self._lastGantry[2], modelview, projection, viewport)
+                    return x - w/2, y - h/2
+                except GLError:
+                    return (canvas_w - w) / 2, (canvas_h - h) / 2 # Default to center
+            else:
+                return (canvas_w - w) / 2, (canvas_h - h) / 2 # Default to center
+        else:
+            # Logic for anchors like NW, S, E, etc.
+            x = (canvas_w - w) / 2
+            y = (canvas_h - h) / 2
+            if N in self.cameraAnchor: y = canvas_h - h
+            elif S in self.cameraAnchor: y = 0
+            if W in self.cameraAnchor: x = 0
+            elif E in self.cameraAnchor: x = canvas_w - w
+            return x, y
+
+    def drawCameraOverlay(self):
+        if not self._camera_on or self._camera_texture is None or self.camera.image is None:
+            return
+
+        width = self.winfo_width()
+        height = self.winfo_height()
+
+        # --- Switch to 2D orthographic projection ---
+        glMatrixMode(GL_PROJECTION)
+        glPushMatrix()
+        glLoadIdentity()
+        glOrtho(0, width, 0, height, -1, 1)
+
+        glMatrixMode(GL_MODELVIEW)
+        glPushMatrix()
+        glLoadIdentity()
+
+        glDisable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+        # --- Draw Camera Texture ---
+        h, w = self.camera.image.shape[:2]
+        x, y = self.getCameraPosition(w, h)
+
+        glColor4f(1.0, 1.0, 1.0, 0.8)
+        glEnable(GL_TEXTURE_2D)
+        glBindTexture(GL_TEXTURE_2D, self._camera_texture)
+        glBegin(GL_QUADS)
+        glTexCoord2f(0.0, 0.0); glVertex2f(x, y)
+        glTexCoord2f(1.0, 0.0); glVertex2f(x + w, y)
+        glTexCoord2f(1.0, 1.0); glVertex2f(x + w, y + h)
+        glTexCoord2f(0.0, 1.0); glVertex2f(x, y + h)
+        glEnd()
+        glDisable(GL_TEXTURE_2D)
+
+        # --- Draw Crosshairs and Circles ---
+        glColor4f(0.0, 1.0, 1.0, 1.0) # Cyan
+        glLineWidth(1.0)
+
+        glBegin(GL_LINES)
+        glVertex2f(x, y + h/2)
+        glVertex2f(x + w, y + h/2)
+        glVertex2f(x + w/2, y)
+        glVertex2f(x + w/2, y + h)
+        glEnd()
+
+        r = self.cameraR * self.cameraScale
+        center_x = x + w/2
+        center_y = y + h/2
+
+        glBegin(GL_LINE_LOOP)
+        for i in range(360):
+            rad = math.radians(i)
+            glVertex2f(center_x + math.cos(rad) * r, center_y + math.sin(rad) * r)
+        glEnd()
+
+        glLineStipple(1, 0x3333)
+        glEnable(GL_LINE_STIPPLE)
+        glBegin(GL_LINE_LOOP)
+        for i in range(360):
+            rad = math.radians(i)
+            glVertex2f(center_x + math.cos(rad) * r * 2, center_y + math.sin(rad) * r * 2)
+        glEnd()
+        glDisable(GL_LINE_STIPPLE)
+
+        # --- Restore 3D projection and state ---
+        glEnable(GL_DEPTH_TEST)
+        glDisable(GL_BLEND)
+        glMatrixMode(GL_PROJECTION)
+        glPopMatrix()
+        glMatrixMode(GL_MODELVIEW)
+        glPopMatrix()
+
     # ----------------------------------------------------------------------
     # Parse and draw the file from the editor to g-code commands
     # ----------------------------------------------------------------------
@@ -1352,6 +1426,7 @@ class CNCCanvas(GLCanvas):
         self._drawVector()
         self.drawInfo()
         self.drawSelectionHighlights()
+        self.drawCameraOverlay()
         self.swap_buffers()
 
         self._inDraw = False
