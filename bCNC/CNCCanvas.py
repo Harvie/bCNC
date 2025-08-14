@@ -1022,6 +1022,7 @@ class CNCCanvas(GLCanvas):
 
     def init_opengl(self):
         """Initialise the GL canvas"""
+        glClearColor(1.0, 1.0, 1.0, 1.0)
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -1411,7 +1412,7 @@ class CanvasFrame(Frame):
         toolbar = Frame(self, relief=RAISED)
         toolbar.grid(row=0, column=0, columnspan=2, sticky=EW)
 
-        self.canvas = CNCCanvas(self, app, background="White")
+        self.canvas = CNCCanvas(self, app)
         # OpenGL context
         self.canvas.grid(row=1, column=0, sticky=NSEW)
 
