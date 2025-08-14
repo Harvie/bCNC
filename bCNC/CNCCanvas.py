@@ -1317,6 +1317,7 @@ class CNCCanvas(GLCanvas):
             for i, block in enumerate(self.gcode.blocks):
                 start = True  # start location found
                 block.resetPath()
+                block.bid = i
 
                 # Draw block
                 for j, line in enumerate(block):
@@ -1347,7 +1348,7 @@ class CNCCanvas(GLCanvas):
                     if cmd is None or not drawG:
                         block.addPath(None)
                     else:
-                        path = self.drawPath(block, cmd)
+                        path = self.drawPath(block, j, cmd)
                         #self._items[path] = i, j
                         block.addPath(path)
                         if start and self.cnc.gcode in (1, 2, 3):
