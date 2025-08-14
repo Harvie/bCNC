@@ -237,6 +237,7 @@ class CNCCanvas(GLCanvas):
         self._lastActive = None
         self._lastGantry = None
         self._last = (0.0, 0.0, 0.0)
+        self.selected_items = []
 
         self._probeImage = None
         self._probeTkImage = None
@@ -438,6 +439,12 @@ class CNCCanvas(GLCanvas):
         self._x = self._xp = event.x
         self._y = self._yp = event.y
 
+        if self.action == ACTION_RULER:
+            self._vx0, self._vy0, self._vz0 = self.canvas2xyz(event.x, event.y)
+            self._vector = [self._vx0, self._vy0, self._vz0, self._vx0, self._vy0, self._vz0]
+            self._mouseAction = ACTION_RULER
+            return
+
         if event.state & CONTROLSHIFT_MASK == CONTROLSHIFT_MASK:
             self.actionGantry(event.x, event.y)
             return
@@ -445,7 +452,12 @@ class CNCCanvas(GLCanvas):
         elif self.action == ACTION_SELECT:
             self._mouseAction = ACTION_SELECT_SINGLE
 
-        elif self.action in (ACTION_MOVE, ACTION_RULER):
+        elif self.action == ACTION_MOVE:
+            self._mouseAction = ACTION_MOVE
+            self._vx0, self._vy0, self._vz0 = self.canvas2xyz(event.x, event.y)
+            #self.app.select_all()
+
+        elif self.action == ACTION_RULER:
             i = self.canvasx(event.x)
             j = self.canvasy(event.y)
             if self.action == ACTION_RULER and self._vector is not None:
@@ -540,6 +552,28 @@ class CNCCanvas(GLCanvas):
         elif self.action == ACTION_PAN:
                 self.t[0] += dx*0.1
                 self.t[1] -= dy*0.1
+        elif self.action == ACTION_RULER:
+            self._vx1, self._vy1, self._vz1 = self.canvas2xyz(event.x, event.y)
+            self._vector[3:] = [self._vx1, self._vy1, self._vz1]
+            dx = self._vx1 - self._vx0
+        elif self.action == ACTION_MOVE:
+            self._vx1, self._vy1, self._vz1 = self.canvas2xyz(event.x, event.y)
+            dx = self._vx1 - self._vx0
+            dy = self._vy1 - self._vy0
+            dz = self._vz1 - self._vz0
+            self.gcode.moveLines(self.selected_items, dx, dy, dz)
+            self._vx0, self._vy0, self._vz0 = self._vx1, self._vy1, self._vz1
+            dy = self._vy1 - self._vy0
+            dz = self._vz1 - self._vz0
+            self.status(
+                _("dx={:g}  dy={:g}  dz={:g}  length={:g}  angle={:g}").format(
+                    dx,
+                    dy,
+                    dz,
+                    math.sqrt(dx**2 + dy**2 + dz**2),
+                    math.degrees(math.atan2(dy, dx)),
+                )
+            )
 
         self._x = event.x
         self._y = event.y
@@ -556,7 +590,22 @@ class CNCCanvas(GLCanvas):
             ACTION_SELECT_AREA,
         ):
             x,y,z = self.canvas2xyz(event.x, event.y)
+            #FIXME: This is a hack to get the selection working
+            # A better way would be to use a proper picking mechanism
+            # or to render the scene to an off-screen buffer with unique colors.
+            # For now, we just print the coordinates.
             print(f"Clicked at: {x}, {y}, {z}")
+
+            # Dummy selection for testing
+            if self.selected_items:
+                self.selected_items = []
+            else:
+                if len(self.gcode.blocks) > 0:
+                    self.selected_items.append((0,0))
+
+            self.app.select(self.selected_items,
+                            self._mouseAction == ACTION_SELECT_DOUBLE,
+                            event.state & CONTROL_MASK == 0)
             self._mouseAction = None
 
         elif self._mouseAction == ACTION_MOVE:
@@ -698,10 +747,10 @@ class CNCCanvas(GLCanvas):
         w = xmax - xmin
         h = ymax - ymin
 
-        if self.winfo_width() > self.winfo_height():
-            self.scale = self.winfo_height() / h * 0.5
-        else:
-            self.scale = self.winfo_width() / w * 0.5
+        if w == 0 or h == 0:
+            return
+
+        self.scale = 0.8 * min(self.winfo_width() / w, self.winfo_height() / h)
         self.draw()
 
     # ----------------------------------------------------------------------
@@ -792,13 +841,15 @@ class CNCCanvas(GLCanvas):
     # Clear highlight of selection
     # ----------------------------------------------------------------------
     def clearSelection(self):
-        pass
+        self.selected_items = []
+        self.draw()
 
     # ----------------------------------------------------------------------
     # Highlight selected items
     # ----------------------------------------------------------------------
     def select(self, items):
-        pass
+        self.selected_items = items
+        self.draw()
 
     # ----------------------------------------------------------------------
     # Select orientation marker
@@ -995,7 +1046,9 @@ class CNCCanvas(GLCanvas):
         if self.projection == PROJECTION_PERSPECTIVE:
             gluPerspective(45, self.winfo_width()/self.winfo_height(), 0.1, 1000.0)
         else:
-            glOrtho(-100, 100, -100, 100, -100, 100)
+            w = self.winfo_width() / self.scale / 2
+            h = self.winfo_height() / self.scale / 2
+            glOrtho(-w, w, -h, h, -1000, 1000)
 
     def set_modelview(self,):
         """Setup the modelview matrix"""
@@ -1032,6 +1085,7 @@ class CNCCanvas(GLCanvas):
         self.drawProbe()
         self.drawOrient()
         self.drawAxes()
+        self._drawVector()
         self.swap_buffers()
 
         self._inDraw = False
@@ -1049,6 +1103,16 @@ class CNCCanvas(GLCanvas):
         self._items.clear()
         self.cnc.initPath()
         self.cnc.resetAllMargins()
+
+    def _drawVector(self):
+        if self._vector is None:
+            return
+        glColor3f(0.0, 1.0, 0.0)
+        glLineWidth(1.0)
+        glBegin(GL_LINES)
+        glVertex3f(*self._vector[:3])
+        glVertex3f(*self._vector[3:])
+        glEnd()
 
     # ----------------------------------------------------------------------
     # Draw gantry location
@@ -1297,7 +1361,7 @@ class CNCCanvas(GLCanvas):
     # ----------------------------------------------------------------------
     # Create path for one g command
     # ----------------------------------------------------------------------
-    def drawPath(self, block, cmds):
+    def drawPath(self, block, j, cmds):
         self.cnc.motionStart(cmds)
         xyz = self.cnc.motionPath()
         self.cnc.motionEnd()
@@ -1314,7 +1378,10 @@ class CNCCanvas(GLCanvas):
                 if self.cnc.gcode == 0:
                     return None
 
-            if self.cnc.gcode == 0:
+            # set color
+            if (block.bid, j) in self.selected_items:
+                glColor3f(0.0, 0.0, 1.0) # blue
+            elif self.cnc.gcode == 0:
                 if self.draw_rapid:
                     glColor3f(0.5, 0.5, 0.5)
                     glLineStipple(1, 0x3333)
@@ -1329,7 +1396,7 @@ class CNCCanvas(GLCanvas):
             glEnd()
             glDisable(GL_LINE_STIPPLE)
 
-        return None
+        return (block.bid, j)
 
 
     # ----------------------------------------------------------------------
