@@ -236,6 +236,7 @@ class CNCCanvas(GLCanvas):
         self._vector = None
         self._lastActive = None
         self._lastGantry = None
+        self._last = (0.0, 0.0, 0.0)
 
         self._probeImage = None
         self._probeTkImage = None
