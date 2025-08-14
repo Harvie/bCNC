@@ -757,43 +757,41 @@ class CNCCanvas(GLCanvas):
     # Snap to the closest point if any
     # ----------------------------------------------------------------------
     def snapPoint(self, cx, cy):
-        xs, ys = None, None
-        if CNC.inch:
-            dmin = (self.zoom / 25.4) ** 2  # 1mm maximum distance ...
-        else:
-            dmin = (self.zoom) ** 2
-        dmin = (CLOSE_DISTANCE * self.zoom) ** 2
+        best_point_screen = (cx, cy)
+        min_dist_sq = (CLOSE_DISTANCE) ** 2
 
-        # ... and if we are closer than 5pixels
-        for item in self.find_closest(cx, cy, CLOSE_DISTANCE):
-            try:
-                bid, lid = self._items[item]
-            except KeyError:
-                continue
+        # This could be slow on large files, but it's only called on a single click
+        try:
+            modelview = glGetDoublev(GL_MODELVIEW_MATRIX)
+            projection = glGetDoublev(GL_PROJECTION_MATRIX)
+            viewport = glGetIntegerv(GL_VIEWPORT)
 
-            # Very cheap and inaccurate approach :)
-            coords = self.coords(item)
-            x = coords[0]  # first
-            y = coords[1]  # point
-            d = (cx - x) ** 2 + (cy - y) ** 2
-            if d < dmin:
-                dmin = d
-                xs, ys = x, y
+            for path in self._full_path_cache.values():
+                # Check start and end points of each segment for performance
+                points_to_check = []
+                if path:
+                    points_to_check.append(path[0])
+                    if len(path) > 1:
+                        points_to_check.append(path[-1])
 
-            x = coords[-2]  # last
-            y = coords[-1]  # point
-            d = (cx - x) ** 2 + (cy - y) ** 2
-            if d < dmin:
-                dmin = d
-                xs, ys = x, y
+                for p3d in points_to_check:
+                    # Project 3D point to 2D screen coordinates
+                    p2d = gluProject(p3d[0], p3d[1], p3d[2], modelview, projection, viewport)
+                    if p2d is None: continue
 
-            # I need to check the real code and if
-            # an arc check also the center?
+                    # Y coordinate is flipped between GL and Tkinter events
+                    screen_y = viewport[3] - p2d[1]
 
-        if xs is not None:
-            return xs, ys
-        else:
+                    dist_sq = (p2d[0] - cx)**2 + (screen_y - cy)**2
+                    if dist_sq < min_dist_sq:
+                        min_dist_sq = dist_sq
+                        best_point_screen = (p2d[0], screen_y)
+
+        except GLError:
+            # This can happen if the context is not ready, just return original coords
             return cx, cy
+
+        return best_point_screen
 
     # ----------------------------------------------------------------------
     # Get margins of selected items
@@ -863,16 +861,20 @@ class CNCCanvas(GLCanvas):
 
     # ----------------------------------------------------------------------
     def panLeft(self, event=None):
-        pass
+        self.t[0] -= 20.0 / self.scale
+        self.draw()
 
     def panRight(self, event=None):
-        pass
+        self.t[0] += 20.0 / self.scale
+        self.draw()
 
     def panUp(self, event=None):
-        pass
+        self.t[1] += 20.0 / self.scale
+        self.draw()
 
     def panDown(self, event=None):
-        pass
+        self.t[1] -= 20.0 / self.scale
+        self.draw()
 
     # ----------------------------------------------------------------------
     # Delay zooming to cascade multiple zoom actions
@@ -1015,16 +1017,11 @@ class CNCCanvas(GLCanvas):
     # Highlight marker that was selected
     # ----------------------------------------------------------------------
     def orientChange(self, marker):
-        self.itemconfig("Orient", width=1)
         if marker >= 0:
             self._orientSelected = marker
-            try:
-                for i in self.gcode.orient.paths[self._orientSelected]:
-                    self.itemconfig(i, width=2)
-            except IndexError:
-                self.drawOrient()
         else:
             self._orientSelected = None
+        self.draw()
 
     # ----------------------------------------------------------------------
     # Display graphical information on selected blocks
@@ -1706,8 +1703,14 @@ class CNCCanvas(GLCanvas):
             return
 
         w = 0.1 if CNC.inch else 2.5
+        glLineWidth(1.0)
 
         for i, (xm, ym, x, y) in enumerate(self.gcode.orient.markers):
+            is_selected = (i == self._orientSelected)
+
+            if is_selected:
+                glLineWidth(2.0)
+
             # Machine position (cross)
             glColor3f(0.0, 1.0, 0.0)
             glBegin(GL_LINES)
@@ -1727,7 +1730,11 @@ class CNCCanvas(GLCanvas):
             glEnd()
 
             # Connecting line
-            glColor3f(0.0, 0.0, 1.0)
+            if is_selected:
+                glColor3f(1.0, 1.0, 0.0) # Yellow
+            else:
+                glColor3f(0.0, 0.0, 1.0) # Blue
+
             glLineStipple(1, 0x3333)
             glEnable(GL_LINE_STIPPLE)
             glBegin(GL_LINES)
@@ -1735,6 +1742,9 @@ class CNCCanvas(GLCanvas):
             glVertex3f(x, y, 0.0)
             glEnd()
             glDisable(GL_LINE_STIPPLE)
+
+            if is_selected:
+                glLineWidth(1.0)
 
 
     def updateProbeTexture(self):
