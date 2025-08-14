@@ -1754,7 +1754,21 @@ class CNCCanvas(GLCanvas):
             self._probe_hash = None
 
         probe = self.gcode.probe
-        if probe.isEmpty() or not probe.cols or not probe.rows or not probe.points:
+        if probe.isEmpty() or not probe.points:
+            return
+
+        # Calculate grid dimensions manually
+        x_step = probe.xstep()
+        y_step = probe.ystep()
+
+        if x_step <= 0 or y_step <= 0:
+            return  # Cannot form a grid
+
+        cols = int(round((probe.xmax - probe.xmin) / x_step)) + 1
+        rows = int(round((probe.ymax - probe.ymin) / y_step)) + 1
+
+        if len(probe.points) != rows * cols:
+            # Data doesn't match grid dimensions
             return
 
         z_values = numpy.array([p[2] for p in probe.points])
@@ -1766,14 +1780,14 @@ class CNCCanvas(GLCanvas):
             normalized = (z_values - z_min) / (z_max - z_min)
 
         try:
-            normalized = normalized.reshape((probe.rows, probe.cols))
+            normalized = normalized.reshape((rows, cols))
         except ValueError:
             # Data doesn't fit grid, can't create image
             return
 
         # Simple colormap: blue (low) -> green -> red (high)
         # Create an (rows, cols, 3) RGB image array
-        image_data = numpy.zeros((probe.rows, probe.cols, 3), dtype=numpy.uint8)
+        image_data = numpy.zeros((rows, cols, 3), dtype=numpy.uint8)
         # Blue to Cyan to Green to Yellow to Red
         r = (255 * numpy.clip(2 * normalized - 1, 0, 1)).astype(numpy.uint8)
         g = (255 * (1 - 2 * numpy.abs(normalized - 0.5))).astype(numpy.uint8)
@@ -1787,7 +1801,7 @@ class CNCCanvas(GLCanvas):
         glBindTexture(GL_TEXTURE_2D, self._probe_texture)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, probe.cols, probe.rows, 0, GL_RGB, GL_UNSIGNED_BYTE, numpy.flipud(image_data))
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, cols, rows, 0, GL_RGB, GL_UNSIGNED_BYTE, numpy.flipud(image_data))
         glBindTexture(GL_TEXTURE_2D, 0)
         self._probe_hash = hashlib.sha1(z_values.tobytes()).hexdigest()
 
