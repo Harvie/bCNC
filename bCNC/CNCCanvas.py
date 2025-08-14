@@ -6,6 +6,7 @@
 import math
 import time
 import sys
+import hashlib
 
 from tkinter import (
     TclError,
@@ -238,6 +239,10 @@ class CNCCanvas(GLCanvas):
         self._lastGantry = None
         self._last = (0.0, 0.0, 0.0)
         self.selected_items = []
+        self.fbo = None
+        self.texture = None
+        self.picking_buffer = None
+        self._picking_mode = False
 
         self._probeImage = None
         self._probeTkImage = None
@@ -278,9 +283,51 @@ class CNCCanvas(GLCanvas):
         self._vx1 = self._vy1 = self._vz1 = 0  # vector move coordinates
 
         self._orientSelected = None
+        self._info_items = []
+        self._probe_texture = None
+        self._probe_hash = None
 
         self.reset()
         self.initPosition()
+
+    def to_id_color(self, bid, lid):
+        """Convert block and line id to a unique color."""
+        # Combine bid and lid into a single 24-bit ID.
+        # This assumes lid < 1024 and bid < 16384.
+        path_id = ((bid & 0x3FFF) << 10) | (lid & 0x3FF)
+        path_id += 1  # a path_id of 0 is reserved for the background
+        r = (path_id >> 16) & 0xFF
+        g = (path_id >> 8) & 0xFF
+        b = path_id & 0xFF
+        return (r / 255.0, g / 255.0, b / 255.0)
+
+    def from_id_color(self, color):
+        """Convert a color back to a block and line id."""
+        r, g, b = color  # color is a tuple of integers (0-255)
+        path_id = (r << 16) | (g << 8) | b
+        if path_id == 0:
+            return None, None
+        path_id -= 1
+        bid = path_id >> 10
+        lid = path_id & 0x3FF
+        return bid, lid
+
+    def init_fbo(self):
+        """Initialize the framebuffer object"""
+        self.fbo = glGenFramebuffers(1)
+        self.texture = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.texture)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, self.winfo_width(), self.winfo_height(), 0, GL_RGB, GL_UNSIGNED_BYTE, None)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, self.texture, 0)
+        self.picking_buffer = glGenRenderbuffers(1)
+        glBindRenderbuffer(GL_RENDERBUFFER, self.picking_buffer)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, self.winfo_width(), self.winfo_height())
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, self.picking_buffer)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
 
     # ----------------------------------------------------------------------
     def reset(self):
@@ -589,23 +636,49 @@ class CNCCanvas(GLCanvas):
             ACTION_SELECT_DOUBLE,
             ACTION_SELECT_AREA,
         ):
-            x,y,z = self.canvas2xyz(event.x, event.y)
-            #FIXME: This is a hack to get the selection working
-            # A better way would be to use a proper picking mechanism
-            # or to render the scene to an off-screen buffer with unique colors.
-            # For now, we just print the coordinates.
-            print(f"Clicked at: {x}, {y}, {z}")
+            # --- Picking Logic ---
+            self.drawForPicking()
 
-            # Dummy selection for testing
-            if self.selected_items:
-                self.selected_items = []
-            else:
-                if len(self.gcode.blocks) > 0:
-                    self.selected_items.append((0,0))
+            # This should be called only if the FBO exists
+            if not self.fbo:
+                self._mouseAction = None
+                return
 
-            self.app.select(self.selected_items,
-                            self._mouseAction == ACTION_SELECT_DOUBLE,
-                            event.state & CONTROL_MASK == 0)
+            glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
+            x = event.x
+            y = self.winfo_height() - event.y  # Y is inverted in OpenGL
+
+            # Make sure we don't read outside the framebuffer
+            if x < 0 or x >= self.winfo_width() or y < 0 or y >= self.winfo_height():
+                glBindFramebuffer(GL_FRAMEBUFFER, 0)
+                self._mouseAction = None
+                return
+
+            color = glReadPixels(x, y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE)
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+            bid, lid = self.from_id_color((color[0], color[1], color[2]))
+
+            new_selection = []
+            if bid is not None and lid is not None:
+                new_selection.append((bid, lid))
+
+            # Handle selection logic
+            is_replace = event.state & CONTROL_MASK == 0
+            if is_replace:
+                self.selected_items = new_selection
+            else:  # Control is pressed, toggle selection
+                for item in new_selection:
+                    if item in self.selected_items:
+                        self.selected_items.remove(item)
+                    else:
+                        self.selected_items.append(item)
+
+            self.app.select(
+                self.selected_items,
+                self._mouseAction == ACTION_SELECT_DOUBLE,
+                is_replace,
+            )
             self._mouseAction = None
 
         elif self._mouseAction == ACTION_MOVE:
@@ -688,8 +761,32 @@ class CNCCanvas(GLCanvas):
     def getMargins(self):
         return 0,0
 
+    def resize_fbo(self):
+        """Resize framebuffer object attachments"""
+        width = self.winfo_width()
+        height = self.winfo_height()
+        if width <= 0 or height <= 0:
+            return
+
+        # Ensure we are on the right context
+        self.make_current()
+
+        glBindTexture(GL_TEXTURE_2D, self.texture)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, None)
+
+        glBindRenderbuffer(GL_RENDERBUFFER, self.picking_buffer)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, width, height)
+
+        # Unbind
+        glBindTexture(GL_TEXTURE_2D, 0)
+        glBindRenderbuffer(GL_RENDERBUFFER, 0)
+
     # ----------------------------------------------------------------------
     def configureEvent(self, event):
+        if self.fbo is None:
+            self.init_fbo()
+        else:
+            self.resize_fbo()
         self.cameraPosition()
 
     # ----------------------------------------------------------------------
@@ -867,8 +964,27 @@ class CNCCanvas(GLCanvas):
     # Display graphical information on selected blocks
     # ----------------------------------------------------------------------
     def showInfo(self, blocks):
-        #FIXME
-        pass
+        self._info_items = []
+        if not blocks:
+            self.draw()
+            return
+
+        for block in blocks:
+            # Bounding box
+            bbox = (
+                block.xmin,
+                block.ymin,
+                block.zmin,
+                block.xmax,
+                block.ymax,
+                block.zmax,
+            )
+            self._info_items.append(("box", bbox))
+
+            # Direction arrow
+            if block.start and block.end and block.start != block.end:
+                self._info_items.append(("arrow", (block.start, block.end)))
+        self.draw()
 
     # -----------------------------------------------------------------------
     def cameraOn(self, event=None):
@@ -1043,6 +1159,78 @@ class CNCCanvas(GLCanvas):
         glRotatef(self.r[2], 0, 0, 1)
         glScalef(self.scale, self.scale, self.scale)
 
+    def drawForPicking(self):
+        if self._inDraw:
+            return
+        self._inDraw = True
+        self._picking_mode = True
+
+        try:
+            # This should be called only if the FBO exists
+            if not self.fbo: return
+
+            glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
+            self.make_current()
+            self.init_opengl() # This sets projection and modelview
+            # Clear to a color that means "nothing" (ID 0)
+            glClearColor(0.0, 0.0, 0.0, 0.0)
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+            # Only draw paths for picking
+            self.drawPaths()
+
+            glFlush() # Ensure all drawing commands are executed
+        finally:
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
+            self._inDraw = False
+            self._picking_mode = False
+            # Restore clear color for normal drawing
+            glClearColor(1.0, 1.0, 1.0, 1.0)
+
+    def drawInfo(self):
+        if not self._info_items:
+            return
+
+        glLineWidth(2.0)
+        # Gold color for info items
+        glColor3f(1.0, 0.84, 0.0)
+        glLineStipple(1, 0xAAAA)
+        glEnable(GL_LINE_STIPPLE)
+
+        for type, data in self._info_items:
+            if type == 'box':
+                xmin, ymin, zmin, xmax, ymax, zmax = data
+                # Draw a 3D bounding box
+                glBegin(GL_LINE_LOOP)
+                glVertex3f(xmin, ymin, zmin)
+                glVertex3f(xmax, ymin, zmin)
+                glVertex3f(xmax, ymax, zmin)
+                glVertex3f(xmin, ymax, zmin)
+                glEnd()
+                glBegin(GL_LINE_LOOP)
+                glVertex3f(xmin, ymin, zmax)
+                glVertex3f(xmax, ymin, zmax)
+                glVertex3f(xmax, ymax, zmax)
+                glVertex3f(xmin, ymax, zmax)
+                glEnd()
+                glBegin(GL_LINES)
+                glVertex3f(xmin, ymin, zmin)
+                glVertex3f(xmin, ymin, zmax)
+                glVertex3f(xmax, ymin, zmin)
+                glVertex3f(xmax, ymin, zmax)
+                glVertex3f(xmax, ymax, zmin)
+                glVertex3f(xmax, ymax, zmax)
+                glVertex3f(xmin, ymax, zmin)
+                glVertex3f(xmin, ymax, zmax)
+                glEnd()
+            elif type == 'arrow':
+                start, end = data
+                glBegin(GL_LINES)
+                glVertex3f(*start)
+                glVertex3f(*end)
+                glEnd()
+        glDisable(GL_LINE_STIPPLE)
+
     # ----------------------------------------------------------------------
     # Parse and draw the file from the editor to g-code commands
     # ----------------------------------------------------------------------
@@ -1069,6 +1257,7 @@ class CNCCanvas(GLCanvas):
         self.drawOrient()
         self.drawAxes()
         self._drawVector()
+        self.drawInfo()
         self.swap_buffers()
 
         self._inDraw = False
@@ -1247,26 +1436,106 @@ class CNCCanvas(GLCanvas):
             glDisable(GL_LINE_STIPPLE)
 
 
+    def updateProbeTexture(self):
+        if self._probe_texture:
+            glDeleteTextures([self._probe_texture])
+            self._probe_texture = None
+            self._probe_hash = None
+
+        probe = self.gcode.probe
+        if probe.isEmpty() or not probe.cols or not probe.rows or not probe.points:
+            return
+
+        z_values = numpy.array([p[2] for p in probe.points])
+        z_min, z_max = z_values.min(), z_values.max()
+
+        if z_max == z_min:
+            normalized = numpy.zeros(z_values.shape)
+        else:
+            normalized = (z_values - z_min) / (z_max - z_min)
+
+        try:
+            normalized = normalized.reshape((probe.rows, probe.cols))
+        except ValueError:
+            # Data doesn't fit grid, can't create image
+            return
+
+        # Simple colormap: blue (low) -> green -> red (high)
+        # Create an (rows, cols, 3) RGB image array
+        image_data = numpy.zeros((probe.rows, probe.cols, 3), dtype=numpy.uint8)
+        # Blue to Cyan to Green to Yellow to Red
+        r = (255 * numpy.clip(2 * normalized - 1, 0, 1)).astype(numpy.uint8)
+        g = (255 * (1 - 2 * numpy.abs(normalized - 0.5))).astype(numpy.uint8)
+        b = (255 * numpy.clip(1 - 2 * normalized, 0, 1)).astype(numpy.uint8)
+
+        image_data[..., 0] = r
+        image_data[..., 1] = g
+        image_data[..., 2] = b
+
+        self._probe_texture = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self._probe_texture)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, probe.cols, probe.rows, 0, GL_RGB, GL_UNSIGNED_BYTE, numpy.flipud(image_data))
+        glBindTexture(GL_TEXTURE_2D, 0)
+        self._probe_hash = hashlib.sha1(z_values.tobytes()).hexdigest()
+
+    def drawProbeImage(self):
+        if self._probe_texture is None: return
+        probe = self.gcode.probe
+        if probe.isEmpty(): return
+
+        # Blend texture with background
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glColor4f(1.0, 1.0, 1.0, 0.7) # Set color to white to not tint the texture
+        glEnable(GL_TEXTURE_2D)
+        glBindTexture(GL_TEXTURE_2D, self._probe_texture)
+
+        z = probe.zmin if self.app.probe.get("probe_surface_z") == "min" else probe.zmax
+
+        glBegin(GL_QUADS)
+        glTexCoord2f(0.0, 0.0); glVertex3f(probe.xmin, probe.ymin, z)
+        glTexCoord2f(1.0, 0.0); glVertex3f(probe.xmax, probe.ymin, z)
+        glTexCoord2f(1.0, 1.0); glVertex3f(probe.xmax, probe.ymax, z)
+        glTexCoord2f(0.0, 1.0); glVertex3f(probe.xmin, probe.ymax, z)
+        glEnd()
+
+        glDisable(GL_TEXTURE_2D)
+        glDisable(GL_BLEND)
+
     # ----------------------------------------------------------------------
     # Display probe
     # ----------------------------------------------------------------------
     def drawProbe(self):
-        if not self.draw_probe:
+        if not self.draw_probe or self.gcode.probe.isEmpty():
+            if self._probe_texture:
+                glDeleteTextures([self._probe_texture])
+                self._probe_texture = None
+                self._probe_hash = None
             return
-        if self.gcode.probe.isEmpty():
-            return
+
+        # Check if probe data changed
+        new_hash = hashlib.sha1(numpy.array(self.gcode.probe.points).tobytes()).hexdigest()
+        if new_hash != self._probe_hash:
+            self.updateProbeTexture()
+
+        # Draw the image surface
+        self.drawProbeImage()
 
         probe = self.gcode.probe
 
         # Draw probe grid
         glColor3f(1.0, 1.0, 0.0)
         glBegin(GL_LINES)
-        for x in bmath.frange(probe.xmin, probe.xmax + 0.00001, probe.xstep()):
-            glVertex3f(x, probe.ymin, 0.0)
-            glVertex3f(x, probe.ymax, 0.0)
-        for y in bmath.frange(probe.ymin, probe.ymax + 0.00001, probe.ystep()):
-            glVertex3f(probe.xmin, y, 0.0)
-            glVertex3f(probe.xmax, y, 0.0)
+        if probe.xstep() > 0:
+            for x in bmath.frange(probe.xmin, probe.xmax + 0.00001, probe.xstep()):
+                glVertex3f(x, probe.ymin, 0.0)
+                glVertex3f(x, probe.ymax, 0.0)
+        if probe.ystep() > 0:
+            for y in bmath.frange(probe.ymin, probe.ymax + 0.00001, probe.ystep()):
+                glVertex3f(probe.xmin, y, 0.0)
+                glVertex3f(probe.xmax, y, 0.0)
         glEnd()
 
         # Draw probe points
@@ -1277,12 +1546,6 @@ class CNCCanvas(GLCanvas):
             glVertex3f(x, y, z)
         glEnd()
 
-    # ----------------------------------------------------------------------
-    # Create the tkimage for the current projection
-    # ----------------------------------------------------------------------
-    def _projectProbeImage(self):
-        #FIXME
-        return 0,0
 
     # ----------------------------------------------------------------------
     # Draw the paths for the whole gcode file
@@ -1363,16 +1626,20 @@ class CNCCanvas(GLCanvas):
                     return None
 
             # set color
-            if (block.bid, j) in self.selected_items:
-                glColor3f(0.0, 0.0, 1.0) # blue
+            if self._picking_mode:
+                r, g, b = self.to_id_color(block.bid, j)
+                glColor3f(r, g, b)
+                glDisable(GL_LINE_STIPPLE)
+            elif (block.bid, j) in self.selected_items:
+                glColor3f(0.0, 0.0, 1.0)  # blue
             elif self.cnc.gcode == 0:
                 if self.draw_rapid:
                     glColor3f(0.5, 0.5, 0.5)
                     glLineStipple(1, 0x3333)
                     glEnable(GL_LINE_STIPPLE)
             elif self.draw_paths:
-                    glColor3f(0.0, 0.0, 0.0)
-                    glDisable(GL_LINE_STIPPLE)
+                glColor3f(0.0, 0.0, 0.0)
+                glDisable(GL_LINE_STIPPLE)
 
             glBegin(GL_LINE_STRIP)
             for x,y,z in xyz:
