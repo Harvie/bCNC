@@ -777,23 +777,6 @@ class CNCCanvas(GLCanvas):
     def wheel(self, event):
         self.zoomCanvas(event.x, event.y, pow(ZOOM, (event.delta // 120)))
 
-    # ----------------------------------------------------------------------
-    # Change the insert marker location
-    # ----------------------------------------------------------------------
-    def activeMarker(self, item):
-        if item is None:
-            return
-        b, i = item
-        if i is None:
-            return
-        block = self.gcode[b]
-        item = block.path(i)
-
-        if item is not None and item != self._lastActive:
-            if self._lastActive is not None:
-                self.itemconfig(self._lastActive, arrow=NONE)
-            self._lastActive = item
-            self.itemconfig(self._lastActive, arrow=LAST)
 
     # ----------------------------------------------------------------------
     # Display gantry
