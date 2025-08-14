@@ -1501,6 +1501,60 @@ class CNCCanvas(GLCanvas):
         glVertex3f(*self._vector[3:])
         glEnd()
 
+    def _drawCone(self, base_center, tip, radius, num_segments=12):
+        # Vector from base to tip (cone's axis)
+        axis_x = tip[0] - base_center[0]
+        axis_y = tip[1] - base_center[1]
+        axis_z = tip[2] - base_center[2]
+        axis_len = math.sqrt(axis_x**2 + axis_y**2 + axis_z**2)
+        if axis_len == 0: return
+        axis_x /= axis_len
+        axis_y /= axis_len
+        axis_z /= axis_len
+
+        # Find a perpendicular vector to define the plane of the cone's base
+        if abs(axis_x) > 0.1 or abs(axis_y) > 0.1:
+            up_vec = (0.0, 0.0, 1.0) # World up
+        else:
+            up_vec = (1.0, 0.0, 0.0) # World right
+
+        # First basis vector for the circle (u) via cross product
+        u_x = axis_y * up_vec[2] - axis_z * up_vec[1]
+        u_y = axis_z * up_vec[0] - axis_x * up_vec[2]
+        u_z = axis_x * up_vec[1] - axis_y * up_vec[0]
+        u_len = math.sqrt(u_x**2 + u_y**2 + u_z**2)
+        u_x /= u_len
+        u_y /= u_len
+        u_z /= u_len
+
+        # Second basis vector for the circle (v) via cross product
+        v_x = u_y * axis_z - u_z * axis_y
+        v_y = u_z * axis_x - u_x * axis_z
+        v_z = u_x * axis_y - u_y * axis_x
+
+        # Draw the cone surface
+        glBegin(GL_TRIANGLE_FAN)
+        glVertex3f(*tip)
+        for i in range(num_segments + 1):
+            angle = i * (2 * math.pi / num_segments)
+            # Position on the circle
+            px = base_center[0] + radius * (math.cos(angle) * u_x + math.sin(angle) * v_x)
+            py = base_center[1] + radius * (math.cos(angle) * u_y + math.sin(angle) * v_y)
+            pz = base_center[2] + radius * (math.cos(angle) * u_z + math.sin(angle) * v_z)
+            glVertex3f(px, py, pz)
+        glEnd()
+
+        # Draw the base circle
+        glBegin(GL_TRIANGLE_FAN)
+        for i in range(num_segments + 1):
+            angle = i * (2 * math.pi / num_segments)
+            # Position on the circle
+            px = base_center[0] + radius * (math.cos(angle) * u_x + math.sin(angle) * v_x)
+            py = base_center[1] + radius * (math.cos(angle) * u_y + math.sin(angle) * v_y)
+            pz = base_center[2] + radius * (math.cos(angle) * u_z + math.sin(angle) * v_z)
+            glVertex3f(px, py, pz)
+        glEnd()
+
     # ----------------------------------------------------------------------
     # Draw gantry location
     # ----------------------------------------------------------------------
@@ -1522,6 +1576,14 @@ class CNCCanvas(GLCanvas):
             glVertex3f(x + math.cos(rad) * 5, y + math.sin(rad) * 5, z)
         glEnd()
 
+        # Draw toolbit cone
+        glColor3f(1.0, 0.0, 0.0) # Red
+        tool_length = 20.0
+        tool_radius = 4.0
+        base = (x, y, z)
+        tip = (x, y, z - tool_length)
+        self._drawCone(base, tip, tool_radius)
+
     # ----------------------------------------------------------------------
     # Draw system axes
     # ----------------------------------------------------------------------
@@ -1529,6 +1591,8 @@ class CNCCanvas(GLCanvas):
         if not self.draw_axes:
             return
         glLineWidth(1.0)
+
+        # Draw axis lines
         glBegin(GL_LINES)
         # X-axis (red)
         glColor3f(1.0, 0.0, 0.0)
@@ -1543,6 +1607,28 @@ class CNCCanvas(GLCanvas):
         glVertex3f(0.0, 0.0, 0.0)
         glVertex3f(0.0, 0.0, 10.0)
         glEnd()
+
+        # Draw arrowheads
+        arrow_length = 2.0
+        arrow_radius = 0.5
+
+        # X-axis arrowhead
+        glColor3f(1.0, 0.0, 0.0)
+        base = (10.0, 0.0, 0.0)
+        tip = (10.0 + arrow_length, 0.0, 0.0)
+        self._drawCone(base, tip, arrow_radius)
+
+        # Y-axis arrowhead
+        glColor3f(0.0, 1.0, 0.0)
+        base = (0.0, 10.0, 0.0)
+        tip = (0.0, 10.0 + arrow_length, 0.0)
+        self._drawCone(base, tip, arrow_radius)
+
+        # Z-axis arrowhead
+        glColor3f(0.0, 0.0, 1.0)
+        base = (0.0, 0.0, 10.0)
+        tip = (0.0, 0.0, 10.0 + arrow_length)
+        self._drawCone(base, tip, arrow_radius)
 
 
     # ----------------------------------------------------------------------
@@ -2204,35 +2290,35 @@ class CanvasFrame(Frame):
         if value is not None:
             self.draw_axes.set(value)
         self.canvas.draw_axes = self.draw_axes.get()
-        self.canvas.drawAxes()
+        self.canvas.draw()
 
     # ----------------------------------------------------------------------
     def drawGrid(self, value=None):
         if value is not None:
             self.draw_grid.set(value)
         self.canvas.draw_grid = self.draw_grid.get()
-        self.canvas.drawGrid()
+        self.canvas.draw()
 
     # ----------------------------------------------------------------------
     def drawMargin(self, value=None):
         if value is not None:
             self.draw_margin.set(value)
         self.canvas.draw_margin = self.draw_margin.get()
-        self.canvas.drawMargin()
+        self.canvas.draw()
 
     # ----------------------------------------------------------------------
     def drawProbe(self, value=None):
         if value is not None:
             self.draw_probe.set(value)
         self.canvas.draw_probe = self.draw_probe.get()
-        self.canvas.drawProbe()
+        self.canvas.draw()
 
     # ----------------------------------------------------------------------
     def drawWorkarea(self, value=None):
         if value is not None:
             self.draw_workarea.set(value)
         self.canvas.draw_workarea = self.draw_workarea.get()
-        self.canvas.drawWorkarea()
+        self.canvas.draw()
 
     # ----------------------------------------------------------------------
     def drawCamera(self, value=None):
