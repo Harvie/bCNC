@@ -294,10 +294,18 @@ class CNCCanvas(GLCanvas):
         self._camera_on = False
         self._camera_texture = None
         self._active_item = None
+        self.processed_items = set()
         self._color_map = {}
 
         self.reset()
         self.initPosition()
+
+    def addProcessedItems(self, items):
+        self.processed_items.update(items)
+        self.draw()
+
+    def clearProcessed(self):
+        self.processed_items.clear()
 
     def _getColor(self, name):
         if name not in self._color_map:
@@ -901,7 +909,8 @@ class CNCCanvas(GLCanvas):
     # ----------------------------------------------------------------------
     def gantry(self, wx, wy, wz, mx, my, mz):
         self._lastGantry = (wx, wy, wz)
-        self._drawGantry(wx, wy, wz)
+        # self._drawGantry(wx, wy, wz)
+        self.draw()
         if self._cameraImage and self.cameraAnchor == NONE:
             self.cameraPosition()
 
@@ -966,8 +975,6 @@ class CNCCanvas(GLCanvas):
         for i, paths in enumerate(self.gcode.orient.paths):
             if item in paths:
                 self._orientSelected = i
-                for j in paths:
-                    self.itemconfig(j, width=2)
                 self.event_generate("<<OrientSelect>>", data=i)
                 return
         self._orientSelected = None
@@ -1443,6 +1450,8 @@ class CNCCanvas(GLCanvas):
         self.drawProbe()
         self.drawOrient()
         self.drawAxes()
+        if self._lastGantry:
+            self._drawGantry(*self._lastGantry)
         self._drawVector()
         self.drawInfo()
         self.drawInsertMarker()
@@ -1956,10 +1965,15 @@ class CNCCanvas(GLCanvas):
             is_selected = (block.bid, j) in self.selected_items
             is_enabled = block.enable
             is_tab = block.operationTest("tab")
+            is_processed = (block.bid, j) in self.processed_items
 
             if self._picking_mode:
                 r, g, b = self.to_id_color(block.bid, j)
                 glColor3f(r, g, b)
+                glDisable(GL_LINE_STIPPLE)
+            elif is_processed:
+                glColor3f(*self._getColor(PROCESS_COLOR))
+                glLineWidth(2.0)
                 glDisable(GL_LINE_STIPPLE)
             elif is_tab:
                 glColor3f(*self._getColor(TABS_COLOR))
