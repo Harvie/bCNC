@@ -651,10 +651,8 @@ class CNCCanvas(GLCanvas):
             if is_replace:
                 self.selected_items = set(new_selection)
             else:  # Control is pressed, toggle selection
-                current_selection = set(self.selected_items)
-                new_selection_set = set(new_selection)
                 # symmetric_difference is XOR
-                self.selected_items = list(current_selection.symmetric_difference(new_selection_set))
+                self.selected_items.symmetric_difference_update(new_selection)
 
             self.app.select(
                 self.selected_items,
@@ -1237,18 +1235,16 @@ class CNCCanvas(GLCanvas):
         glLineWidth(2.0)
         glColor3f(*self._getColor(SELECT_COLOR))
 
-        glBegin(GL_LINES)
         for bid, lid in self.selected_items:
             path_xyz = self._full_path_cache.get((bid, lid))
             if not path_xyz:
                 continue
 
-            for i in range(len(path_xyz) - 1):
-                p1 = path_xyz[i]
-                p2 = path_xyz[i+1]
-                glVertex3f(*p1)
-                glVertex3f(*p2)
-        glEnd()
+            glBegin(GL_LINE_STRIP)
+            for x, y, z in path_xyz:
+                glVertex3f(x, y, z)
+            glEnd()
+
         glLineWidth(1.0)
 
     def getCameraPosition(self, w, h):
@@ -1898,7 +1894,6 @@ class CNCCanvas(GLCanvas):
             # set color and line width
             is_tab = "tabs" in block.name().lower()
             is_active = (block.bid, j) == self._active_item
-            is_selected = (block.bid, j) in self.selected_items
             is_enabled = block.enable
             is_tab = block.operationTest("tab")
 
@@ -1921,14 +1916,7 @@ class CNCCanvas(GLCanvas):
             elif not is_enabled:
                 glLineWidth(1.0)
                 glDisable(GL_LINE_STIPPLE)
-                if is_selected:
-                    glColor3f(*self._getColor(SELECT2_COLOR))
-                else:
-                    glColor3f(*self._getColor(DISABLE_COLOR))
-            elif is_selected:
-                glColor3f(*self._getColor(SELECT_COLOR))
-                glLineWidth(1.0) # Ensure it's normal width
-                glDisable(GL_LINE_STIPPLE)
+                glColor3f(*self._getColor(DISABLE_COLOR))
             elif self.cnc.gcode == 0:
                 if self.draw_rapid:
                     glColor3f(*self._getColor(GRID_COLOR)) # Same color as grid
