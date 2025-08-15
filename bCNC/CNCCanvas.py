@@ -92,7 +92,7 @@ DRAW_TIME = 5  # Maximum draw time permitted
 INSERT_COLOR = "Blue"
 GANTRY_COLOR = "Red"
 MARGIN_COLOR = "Magenta"
-GRID_COLOR = "Gray"
+GRID_COLOR = "light gray"
 BOX_SELECT = "Cyan"
 TAB_COLOR = "DarkOrange"
 TABS_COLOR = "Orange"
@@ -194,7 +194,8 @@ class CNCCanvas(GLCanvas):
         self.bind("<ButtonRelease-1>", self.release)
         self.bind("<Double-1>", self.double)
 
-        self.bind("<B2-Motion>", self.pan)
+        self.bind("<Button-2>", self.panPress)
+        self.bind("<B2-Motion>", self.panMotion)
         self.bind("<ButtonRelease-2>", self.panRelease)
         self.bind("<Button-4>", self.mouseZoomIn)
         self.bind("<Button-5>", self.mouseZoomOut)
@@ -293,9 +294,18 @@ class CNCCanvas(GLCanvas):
         self._camera_on = False
         self._camera_texture = None
         self._active_item = None
+        self._color_map = {}
 
         self.reset()
         self.initPosition()
+
+    def _getColor(self, name):
+        if name not in self._color_map:
+            # Tkinter returns 16-bit colors (0-65535)
+            r, g, b = self.winfo_rgb(name)
+            # Scale to 0.0-1.0 for OpenGL
+            self._color_map[name] = (r / 65535.0, g / 65535.0, b / 65535.0)
+        return self._color_map[name]
 
     def to_id_color(self, bid, lid):
         """Convert block and line id to a unique color."""
@@ -473,7 +483,7 @@ class CNCCanvas(GLCanvas):
     # Add an orientation marker at mouse location
     # ----------------------------------------------------------------------
     def actionAddOrient(self, x, y):
-        cx, cy = self.snapPoint(self.canvasx(x), self.canvasy(y))
+        cx, cy = self.snapPoint(x, y)
         u, v, w = self.canvas2Machine(cx, cy)
         if u is None or v is None:
             self.status(
@@ -491,107 +501,42 @@ class CNCCanvas(GLCanvas):
         self.focus_set()
         self._x = self._xp = event.x
         self._y = self._yp = event.y
-
-        if self.action == ACTION_RULER:
-            self._vx0, self._vy0, self._vz0 = self.canvas2xyz(event.x, event.y)
-            self._vector = [self._vx0, self._vy0, self._vz0, self._vx0, self._vy0, self._vz0]
-            self._mouseAction = ACTION_RULER
-            return
+        self._mouseAction = None # Reset mouse action
 
         if event.state & CONTROLSHIFT_MASK == CONTROLSHIFT_MASK:
             self.actionGantry(event.x, event.y)
             return
 
-        elif self.action == ACTION_SELECT:
+        if self.action == ACTION_SELECT:
             self._mouseAction = ACTION_SELECT_SINGLE
+
+        elif self.action == ACTION_RULER:
+            self._vx0, self._vy0, self._vz0 = self.canvas2xyz(event.x, event.y)
+            self._vector = [self._vx0, self._vy0, self._vz0, self._vx0, self._vy0, self._vz0]
+            self._mouseAction = ACTION_RULER
 
         elif self.action == ACTION_MOVE:
             self._mouseAction = ACTION_MOVE
             self._vx0, self._vy0, self._vz0 = self.canvas2xyz(event.x, event.y)
-            #self.app.select_all()
-
-        elif self.action == ACTION_RULER:
-            i = self.canvasx(event.x)
-            j = self.canvasy(event.y)
-            if self.action == ACTION_RULER and self._vector is not None:
-                # Check if we hit the existing ruler
-                coords = self.coords(self._vector)
-                if abs(coords[0] - i) <= CLOSE_DISTANCE and abs(
-                    coords[1] - j <= CLOSE_DISTANCE
-                ):
-                    # swap coordinates
-                    coords[0], coords[2] = coords[2], coords[0]
-                    coords[1], coords[3] = coords[3], coords[1]
-                    self.coords(self._vector, *coords)
-                    self._vx0, self._vy0, self._vz0 = self.canvas2xyz(
-                        coords[0], coords[1]
-                    )
-                    self._mouseAction = self.action
-                    return
-                elif abs(coords[2] - i) <= CLOSE_DISTANCE and abs(
-                    coords[3] - j <= CLOSE_DISTANCE
-                ):
-                    self._mouseAction = self.action
-                    return
-
-            if self._vector:
-                self.delete(self._vector)
-            if self.action == ACTION_MOVE:
-                # Check if we clicked on a selected item
-                try:
-                    for item in self.find_overlapping(
-                        i - CLOSE_DISTANCE,
-                        j - CLOSE_DISTANCE,
-                        i + CLOSE_DISTANCE,
-                        j + CLOSE_DISTANCE,
-                    ):
-                        tags = self.gettags(item)
-                        if (
-                            "sel" in tags
-                            or "sel2" in tags
-                            or "sel3" in tags
-                            or "sel4" in tags
-                        ):
-                            break
-                    else:
-                        self._mouseAction = ACTION_SELECT_SINGLE
-                        return
-                    fill = MOVE_COLOR
-                    arrow = LAST
-                except Exception:
-                    self._mouseAction = ACTION_SELECT_SINGLE
-                    return
-            else:
-                fill = RULER_COLOR
-                arrow = BOTH
-            self._vector = self.create_line(
-                (i, j, i, j), fill=fill, arrow=arrow)
-            self._vx0, self._vy0, self._vz0 = self.canvas2xyz(i, j)
-            self._mouseAction = self.action
-
-        # Move gantry to position
-        elif self.action == ACTION_GANTRY:
-            self.actionGantry(event.x, event.y)
-
-        # Move gantry to position
-        elif self.action == ACTION_WPOS:
-            self.actionWPOS(event.x, event.y)
-
-        # Add orientation marker
-        elif self.action == ACTION_ADDORIENT:
-            self.actionAddOrient(event.x, event.y)
-
-        # Set coordinate origin
-        elif self.action == ACTION_ORIGIN:
-            i = self.canvasx(event.x)
-            j = self.canvasy(event.y)
-            x, y, z = self.canvas2xyz(i, j)
-            self.app.insertCommand(_("origin {:g} {:g} {:g}").format(x, y, z),
-                                   True)
-            self.setActionSelect()
+            self._vector = [self._vx0, self._vy0, self._vz0, self._vx0, self._vy0, self._vz0]
 
         elif self.action == ACTION_PAN:
             self._mouseAction = ACTION_PAN
+
+        elif self.action == ACTION_GANTRY:
+            self.actionGantry(event.x, event.y)
+
+        elif self.action == ACTION_WPOS:
+            self.actionWPOS(event.x, event.y)
+
+        elif self.action == ACTION_ADDORIENT:
+            self.actionAddOrient(event.x, event.y)
+
+        elif self.action == ACTION_ORIGIN:
+            x, y, z = self.canvas2xyz(event.x, event.y)
+            self.app.insertCommand(_("origin {:g} {:g} {:g}").format(x, y, z),
+                                   True)
+            self.setActionSelect()
 
     # ----------------------------------------------------------------------
     # Canvas motion button 1
@@ -630,6 +575,7 @@ class CNCCanvas(GLCanvas):
             )
         elif self._mouseAction == ACTION_MOVE:
             self._vx1, self._vy1, self._vz1 = self.canvas2xyz(event.x, event.y)
+            self._vector[3:] = [self._vx1, self._vy1, self._vz1]
             dx_move = self._vx1 - self._vx0
             dy_move = self._vy1 - self._vy0
             dz_move = self._vz1 - self._vz0
@@ -728,6 +674,7 @@ class CNCCanvas(GLCanvas):
             self.status(_("Move by {:g}, {:g}, {:g}").format(dx, dy, dz))
             self.app.insertCommand(("move %g %g %g") % (dx, dy, dz), True)
             self._mouseAction = None
+            self._vector = None
 
         elif self._mouseAction == ACTION_PAN:
             self.setAction(ACTION_SELECT)
@@ -848,16 +795,24 @@ class CNCCanvas(GLCanvas):
         self.cameraPosition()
 
     # ----------------------------------------------------------------------
-    def pan(self, event):
+    def panPress(self, event):
         self._x = event.x
         self._y = event.y
         self.config(cursor=mouseCursor(ACTION_PAN))
-        self.action = ACTION_PAN
+
+    def panMotion(self, event):
+        dx = event.x - self._x
+        dy = event.y - self._y
+        self.t[0] += dx * 0.1
+        self.t[1] -= dy * 0.1
+        self._x = event.x
+        self._y = event.y
+        self.draw()
 
     # ----------------------------------------------------------------------
     def panRelease(self, event):
         self._mouseAction = None
-        self.config(cursor=mouseCursor(self.action))
+        self.config(cursor=mouseCursor(self.action)) # Restore cursor
 
     # ----------------------------------------------------------------------
     def panLeft(self, event=None):
@@ -1277,7 +1232,7 @@ class CNCCanvas(GLCanvas):
             return
 
         glLineWidth(2.0)
-        glColor3f(0.0, 0.0, 1.0)  # Blue, to match selection color
+        glColor3f(*self._getColor(SELECT_COLOR))
 
         for bid, lid in self.selected_items:
             coords = self._path_coords.get((bid, lid))
@@ -1448,6 +1403,17 @@ class CNCCanvas(GLCanvas):
         glMatrixMode(GL_MODELVIEW)
         glPopMatrix()
 
+    def drawInsertMarker(self):
+        if self._lastInsert is None:
+            return
+        x, y, z = self._lastInsert
+        glColor3f(*self._getColor(INSERT_COLOR))
+        glLineWidth(1.0)
+        glPointSize(7.0)
+        glBegin(GL_POINTS)
+        glVertex3f(x, y, z)
+        glEnd()
+
     # ----------------------------------------------------------------------
     # Parse and draw the file from the editor to g-code commands
     # ----------------------------------------------------------------------
@@ -1475,6 +1441,7 @@ class CNCCanvas(GLCanvas):
         self.drawAxes()
         self._drawVector()
         self.drawInfo()
+        self.drawInsertMarker()
         self.drawSelectionHighlights()
         self.drawCameraOverlay()
         self.swap_buffers()
@@ -1498,7 +1465,12 @@ class CNCCanvas(GLCanvas):
     def _drawVector(self):
         if self._vector is None:
             return
-        glColor3f(0.0, 1.0, 0.0)
+
+        if self._mouseAction == ACTION_MOVE:
+            glColor3f(*self._getColor(MOVE_COLOR))
+        else: # Default to ruler
+            glColor3f(*self._getColor(RULER_COLOR))
+
         glLineWidth(1.0)
         glBegin(GL_LINES)
         glVertex3f(*self._vector[:3])
@@ -1563,7 +1535,7 @@ class CNCCanvas(GLCanvas):
     # Draw gantry location
     # ----------------------------------------------------------------------
     def _drawGantry(self, x, y, z):
-        glColor3f(1.0, 0.0, 0.0)
+        glColor3f(*self._getColor(GANTRY_COLOR))
         glLineWidth(1.0)
         glBegin(GL_LINES)
         glVertex3f(x - 10, y, z)
@@ -1643,7 +1615,7 @@ class CNCCanvas(GLCanvas):
             return
 
         if CNC.isMarginValid():
-            glColor3f(1.0, 0.0, 1.0)
+            glColor3f(*self._getColor(MARGIN_COLOR))
             glBegin(GL_LINE_LOOP)
             glVertex3f(CNC.vars["xmin"], CNC.vars["ymin"], 0.0)
             glVertex3f(CNC.vars["xmax"], CNC.vars["ymin"], 0.0)
@@ -1652,7 +1624,7 @@ class CNCCanvas(GLCanvas):
             glEnd()
 
         if CNC.isAllMarginValid():
-            glColor3f(1.0, 0.0, 1.0)
+            glColor3f(*self._getColor(MARGIN_COLOR))
             glLineStipple(1, 0x3333)
             glEnable(GL_LINE_STIPPLE)
             glBegin(GL_LINE_LOOP)
@@ -1675,7 +1647,7 @@ class CNCCanvas(GLCanvas):
         xmax = self._dx
         ymax = self._dy
 
-        glColor3f(1.0, 0.5, 0.0)
+        glColor3f(*self._getColor(WORK_COLOR))
         glLineStipple(1, 0x3333)
         glEnable(GL_LINE_STIPPLE)
         glBegin(GL_LINE_LOOP)
@@ -1693,7 +1665,7 @@ class CNCCanvas(GLCanvas):
         if not self.draw_grid:
             return
         glLineWidth(1.0)
-        glColor3f(0.8, 0.8, 0.8)
+        glColor3f(*self._getColor(GRID_COLOR))
         glBegin(GL_LINES)
         for i in range(-100, 101, 10):
             glVertex3f(i, -100.0, 0.0)
@@ -1858,7 +1830,7 @@ class CNCCanvas(GLCanvas):
         probe = self.gcode.probe
 
         # Draw probe grid
-        glColor3f(1.0, 1.0, 0.0)
+        glColor3f(*self._getColor("yellow"))
         glBegin(GL_LINES)
         if probe.xstep() > 0:
             for x in bmath.frange(probe.xmin, probe.xmax + 0.00001, probe.xstep()):
@@ -1871,7 +1843,7 @@ class CNCCanvas(GLCanvas):
         glEnd()
 
         # Draw probe points
-        glColor3f(0.0, 1.0, 0.0)
+        glColor3f(*self._getColor(PROBE_TEXT_COLOR))
         glPointSize(5.0)
         glBegin(GL_POINTS)
         for x, y, z in probe.points:
@@ -1879,7 +1851,7 @@ class CNCCanvas(GLCanvas):
         glEnd()
 
         # Draw probe text
-        glColor3f(0.0, 0.5, 0.0) # Dark Green
+        glColor3f(*self._getColor(PROBE_TEXT_COLOR))
         for x, y, z in probe.points:
             glRasterPos3f(x + 0.5, y + 0.5, z)
             text = f"{z:.{CNC.digits}f}"
@@ -1961,6 +1933,11 @@ class CNCCanvas(GLCanvas):
             if self.cnc.gcode in (1, 2, 3):
                 block.pathMargins(xyz)
                 self.cnc.pathMargins(block)
+
+            # Update last insert position
+            if (block.bid, j) == self._active_item:
+                self._lastInsert = xyz[-1]
+
             if block.enable:
                 if self.cnc.gcode == 0 and self.draw_rapid:
                     xyz[0] = self._last
@@ -1970,36 +1947,46 @@ class CNCCanvas(GLCanvas):
                     return None
 
             # set color and line width
+            is_tab = "tabs" in block.name().lower()
             is_active = (block.bid, j) == self._active_item
             is_selected = (block.bid, j) in self.selected_items
             is_enabled = block.enable
+            is_tab = block.operationTest("tab")
 
             if self._picking_mode:
                 r, g, b = self.to_id_color(block.bid, j)
                 glColor3f(r, g, b)
                 glDisable(GL_LINE_STIPPLE)
+            elif is_tab:
+                glColor3f(*self._getColor(TABS_COLOR))
+                glLineWidth(4.0)
+                glDisable(GL_LINE_STIPPLE)
             elif is_active:
-                glColor3f(1.0, 0.65, 0.0)  # Orange for active
+                glColor3f(*self._getColor(INFO_COLOR))
                 glLineWidth(2.0)
+                glDisable(GL_LINE_STIPPLE)
+            elif is_tab:
+                glColor3f(*self._getColor(TABS_COLOR))
+                glLineWidth(1.0)
                 glDisable(GL_LINE_STIPPLE)
             elif not is_enabled:
                 glLineWidth(1.0)
                 glDisable(GL_LINE_STIPPLE)
                 if is_selected:
-                    glColor3f(0.25, 0.88, 0.82)  # Turquoise for disabled+selected
+                    glColor3f(*self._getColor(SELECT2_COLOR))
                 else:
-                    glColor3f(0.75, 0.75, 0.75)  # Light Gray for disabled
+                    glColor3f(*self._getColor(DISABLE_COLOR))
             elif is_selected:
-                glColor3f(0.0, 0.0, 1.0)  # Blue for selected
+                glColor3f(*self._getColor(SELECT_COLOR))
                 glLineWidth(1.0) # Ensure it's normal width
                 glDisable(GL_LINE_STIPPLE)
             elif self.cnc.gcode == 0:
                 if self.draw_rapid:
-                    glColor3f(0.5, 0.5, 0.5)
+                    glColor3f(*self._getColor(GRID_COLOR)) # Same color as grid
                     glLineStipple(1, 0x3333)
                     glEnable(GL_LINE_STIPPLE)
             elif self.draw_paths:
-                glColor3f(0.0, 0.0, 0.0)
+                glColor3f(*self._getColor(ENABLE_COLOR))
                 glDisable(GL_LINE_STIPPLE)
 
             glBegin(GL_LINE_STRIP)
@@ -2008,7 +1995,7 @@ class CNCCanvas(GLCanvas):
             glEnd()
 
             # Reset line width if it was changed
-            if is_active:
+            if is_active or is_tab:
                 glLineWidth(1.0)
 
             glDisable(GL_LINE_STIPPLE)
