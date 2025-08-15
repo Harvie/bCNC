@@ -241,7 +241,7 @@ class CNCCanvas(GLCanvas):
         self._lastActive = None
         self._lastGantry = None
         self._last = (0.0, 0.0, 0.0)
-        self.selected_items = []
+        self.selected_items = set()
         self.fbo = None
         self.texture = None
         self.picking_buffer = None
@@ -295,24 +295,9 @@ class CNCCanvas(GLCanvas):
         self._camera_texture = None
         self._active_item = None
         self._color_map = {}
-        self._continuous_redraw_after_id = None
 
         self.reset()
         self.initPosition()
-
-    def _continuous_redraw(self):
-        self.draw()
-        self._continuous_redraw_after_id = self.after(30, self._continuous_redraw)
-
-    def start_continuous_redraw(self):
-        if self._continuous_redraw_after_id is not None:
-            self.after_cancel(self._continuous_redraw_after_id)
-        self._continuous_redraw()
-
-    def stop_continuous_redraw(self):
-        if self._continuous_redraw_after_id is not None:
-            self.after_cancel(self._continuous_redraw_after_id)
-            self._continuous_redraw_after_id = None
 
     def _getColor(self, name):
         if name not in self._color_map:
@@ -422,7 +407,6 @@ class CNCCanvas(GLCanvas):
         if self.action != ACTION_SELECT or (
             self._mouseAction != ACTION_SELECT and self._mouseAction is not None
         ):
-            self.stop_continuous_redraw()
             self.setAction(ACTION_SELECT)
             return "break"
 
@@ -530,7 +514,6 @@ class CNCCanvas(GLCanvas):
             self._vx0, self._vy0, self._vz0 = self.canvas2xyz(event.x, event.y)
             self._vector = [self._vx0, self._vy0, self._vz0, self._vx0, self._vy0, self._vz0]
             self._mouseAction = ACTION_RULER
-            self.start_continuous_redraw()
 
         elif self.action == ACTION_MOVE:
             self._mouseAction = ACTION_MOVE
@@ -666,13 +649,12 @@ class CNCCanvas(GLCanvas):
             # Handle selection logic
             is_replace = event.state & CONTROL_MASK == 0
             if is_replace:
-                self.selected_items = new_selection
+                self.selected_items = set(new_selection)
             else:  # Control is pressed, toggle selection
-                for item in new_selection:
-                    if item in self.selected_items:
-                        self.selected_items.remove(item)
-                    else:
-                        self.selected_items.append(item)
+                current_selection = set(self.selected_items)
+                new_selection_set = set(new_selection)
+                # symmetric_difference is XOR
+                self.selected_items = list(current_selection.symmetric_difference(new_selection_set))
 
             self.app.select(
                 self.selected_items,
@@ -694,7 +676,6 @@ class CNCCanvas(GLCanvas):
             self._vector = None
 
         elif self._mouseAction == ACTION_RULER:
-            self.stop_continuous_redraw()
             self._vector = None
             self.setAction(ACTION_SELECT)
 
@@ -960,7 +941,7 @@ class CNCCanvas(GLCanvas):
     # Clear highlight of selection
     # ----------------------------------------------------------------------
     def clearSelection(self):
-        self.selected_items = []
+        self.selected_items.clear()
         self.draw()
 
     def activeMarker(self, item=None):
@@ -973,7 +954,7 @@ class CNCCanvas(GLCanvas):
     # Highlight selected items
     # ----------------------------------------------------------------------
     def select(self, items):
-        self.selected_items = items
+        self.selected_items = set(items)
         self.draw()
 
     # ----------------------------------------------------------------------
@@ -1256,73 +1237,19 @@ class CNCCanvas(GLCanvas):
         glLineWidth(2.0)
         glColor3f(*self._getColor(SELECT_COLOR))
 
+        glBegin(GL_LINES)
         for bid, lid in self.selected_items:
-            coords = self._path_coords.get((bid, lid))
-            if not coords:
+            path_xyz = self._full_path_cache.get((bid, lid))
+            if not path_xyz:
                 continue
 
-            start_point, end_point = coords
-            if start_point == end_point:
-                continue
-
-            # Vector from start to end
-            dx = end_point[0] - start_point[0]
-            dy = end_point[1] - start_point[1]
-            dz = end_point[2] - start_point[2]
-
-            # Normalize the vector
-            length = math.sqrt(dx * dx + dy * dy + dz * dz)
-            if length == 0:
-                continue
-            dx /= length
-            dy /= length
-            dz /= length
-
-            # Arrowhead size
-            arrow_size = self.scale * 0.2
-            if arrow_size < 0.5: arrow_size = 0.5
-            if arrow_size > 2.0: arrow_size = 2.0
-
-            # Arrow base point
-            base_point = (
-                end_point[0] - dx * arrow_size,
-                end_point[1] - dy * arrow_size,
-                end_point[2] - dz * arrow_size,
-            )
-
-            # Perpendicular vector for arrowhead base using cross product
-            # Find a vector that is not parallel to the direction vector
-            if abs(dx) > 0.1 or abs(dy) > 0.1:
-                up_vec = (0.0, 0.0, 1.0) # World up
-            else:
-                up_vec = (1.0, 0.0, 0.0) # World right
-
-            p_dx = dy * up_vec[2] - dz * up_vec[1]
-            p_dy = dz * up_vec[0] - dx * up_vec[2]
-            p_dz = dx * up_vec[1] - dy * up_vec[0]
-            p_len = math.sqrt(p_dx**2 + p_dy**2 + p_dz**2)
-            p_dx /= p_len
-            p_dy /= p_len
-            p_dz /= p_len
-
-            # Arrowhead base vertices
-            v1 = (
-                base_point[0] + p_dx * arrow_size * 0.4,
-                base_point[1] + p_dy * arrow_size * 0.4,
-                base_point[2] + p_dz * arrow_size * 0.4,
-            )
-            v2 = (
-                base_point[0] - p_dx * arrow_size * 0.4,
-                base_point[1] - p_dy * arrow_size * 0.4,
-                base_point[2] - p_dz * arrow_size * 0.4,
-            )
-
-            # Draw a simple triangle arrowhead
-            glBegin(GL_TRIANGLES)
-            glVertex3f(*end_point)
-            glVertex3f(*v1)
-            glVertex3f(*v2)
-            glEnd()
+            for i in range(len(path_xyz) - 1):
+                p1 = path_xyz[i]
+                p2 = path_xyz[i+1]
+                glVertex3f(*p1)
+                glVertex3f(*p2)
+        glEnd()
+        glLineWidth(1.0)
 
     def getCameraPosition(self, w, h):
         canvas_w = self.winfo_width()
