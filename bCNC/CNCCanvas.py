@@ -676,6 +676,10 @@ class CNCCanvas(GLCanvas):
             self._mouseAction = None
             self._vector = None
 
+        elif self._mouseAction == ACTION_RULER:
+            self._vector = None
+            self.setAction(ACTION_SELECT)
+
         elif self._mouseAction == ACTION_PAN:
             self.setAction(ACTION_SELECT)
 
