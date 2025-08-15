@@ -294,18 +294,25 @@ class CNCCanvas(GLCanvas):
         self._camera_on = False
         self._camera_texture = None
         self._active_item = None
-        self.processed_items = set()
         self._color_map = {}
+        self._continuous_redraw_after_id = None
 
         self.reset()
         self.initPosition()
 
-    def addProcessedItems(self, items):
-        self.processed_items.update(items)
+    def _continuous_redraw(self):
         self.draw()
+        self._continuous_redraw_after_id = self.after(30, self._continuous_redraw)
 
-    def clearProcessed(self):
-        self.processed_items.clear()
+    def start_continuous_redraw(self):
+        if self._continuous_redraw_after_id is not None:
+            self.after_cancel(self._continuous_redraw_after_id)
+        self._continuous_redraw()
+
+    def stop_continuous_redraw(self):
+        if self._continuous_redraw_after_id is not None:
+            self.after_cancel(self._continuous_redraw_after_id)
+            self._continuous_redraw_after_id = None
 
     def _getColor(self, name):
         if name not in self._color_map:
@@ -415,6 +422,7 @@ class CNCCanvas(GLCanvas):
         if self.action != ACTION_SELECT or (
             self._mouseAction != ACTION_SELECT and self._mouseAction is not None
         ):
+            self.stop_continuous_redraw()
             self.setAction(ACTION_SELECT)
             return "break"
 
@@ -522,6 +530,7 @@ class CNCCanvas(GLCanvas):
             self._vx0, self._vy0, self._vz0 = self.canvas2xyz(event.x, event.y)
             self._vector = [self._vx0, self._vy0, self._vz0, self._vx0, self._vy0, self._vz0]
             self._mouseAction = ACTION_RULER
+            self.start_continuous_redraw()
 
         elif self.action == ACTION_MOVE:
             self._mouseAction = ACTION_MOVE
@@ -685,6 +694,7 @@ class CNCCanvas(GLCanvas):
             self._vector = None
 
         elif self._mouseAction == ACTION_RULER:
+            self.stop_continuous_redraw()
             self._vector = None
             self.setAction(ACTION_SELECT)
 
@@ -909,8 +919,7 @@ class CNCCanvas(GLCanvas):
     # ----------------------------------------------------------------------
     def gantry(self, wx, wy, wz, mx, my, mz):
         self._lastGantry = (wx, wy, wz)
-        # self._drawGantry(wx, wy, wz)
-        self.draw()
+        self._drawGantry(wx, wy, wz)
         if self._cameraImage and self.cameraAnchor == NONE:
             self.cameraPosition()
 
@@ -975,6 +984,8 @@ class CNCCanvas(GLCanvas):
         for i, paths in enumerate(self.gcode.orient.paths):
             if item in paths:
                 self._orientSelected = i
+                for j in paths:
+                    self.itemconfig(j, width=2)
                 self.event_generate("<<OrientSelect>>", data=i)
                 return
         self._orientSelected = None
@@ -1450,8 +1461,6 @@ class CNCCanvas(GLCanvas):
         self.drawProbe()
         self.drawOrient()
         self.drawAxes()
-        if self._lastGantry:
-            self._drawGantry(*self._lastGantry)
         self._drawVector()
         self.drawInfo()
         self.drawInsertMarker()
@@ -1965,15 +1974,10 @@ class CNCCanvas(GLCanvas):
             is_selected = (block.bid, j) in self.selected_items
             is_enabled = block.enable
             is_tab = block.operationTest("tab")
-            is_processed = (block.bid, j) in self.processed_items
 
             if self._picking_mode:
                 r, g, b = self.to_id_color(block.bid, j)
                 glColor3f(r, g, b)
-                glDisable(GL_LINE_STIPPLE)
-            elif is_processed:
-                glColor3f(*self._getColor(PROCESS_COLOR))
-                glLineWidth(2.0)
                 glDisable(GL_LINE_STIPPLE)
             elif is_tab:
                 glColor3f(*self._getColor(TABS_COLOR))
